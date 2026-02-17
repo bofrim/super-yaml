@@ -261,9 +261,9 @@ This is not a full YAML 1.2 parser.
 ## CLI Reference
 
 ```text
-super-yaml validate <file>
-super-yaml compile <file> [--pretty] [--format json|yaml]
-super-yaml compile <file> [--yaml|--json]
+super-yaml validate <file> [--allow-env KEY]...
+super-yaml compile <file> [--pretty] [--format json|yaml] [--allow-env KEY]...
+super-yaml compile <file> [--yaml|--json] [--allow-env KEY]...
 ```
 
 ### `validate`
@@ -271,18 +271,21 @@ super-yaml compile <file> [--yaml|--json]
 - reads file
 - runs full compilation pipeline
 - prints `OK` on success
+- environment access is disabled unless keys are explicitly allowed
 
 ### `compile`
 
 - reads file
 - compiles and emits resolved output
 - defaults to compact JSON
+- environment access is disabled unless keys are explicitly allowed
 
 Options:
 
 - `--pretty`: pretty JSON output
 - `--format json|yaml`: explicit output format
 - `--yaml`, `--json`: format shortcuts
+- `--allow-env KEY`: allow access to one process environment variable key (repeatable)
 
 ## Rust API
 
@@ -381,4 +384,3 @@ cargo clippy --all-targets --all-features
 - only `from: env` bindings are supported
 - expression variable paths are dot-based object traversal
 - parser is a YAML subset, not full YAML
-

@@ -71,8 +71,8 @@ fn resolve_one_binding(
     if let Some(raw) = env_provider.get(&binding.key) {
         parse_env_scalar(&raw).map_err(|e| {
             SyamlError::EnvError(format!(
-                "failed to parse env {}='{}': {e}",
-                binding.key, raw
+                "failed to parse env '{}': {e}",
+                binding.key
             ))
         })
     } else if let Some(default) = &binding.default {
