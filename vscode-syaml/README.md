@@ -11,8 +11,36 @@ This extension adds:
 In order, the extension tries:
 
 1. `syaml.parser.path` (if set)
-2. `target/debug/super-yaml` in the current workspace
-3. `cargo run --quiet --bin super-yaml -- validate <file>`
+2. bundled binary in the extension: `bin/<platform>-<arch>/super-yaml`
+3. `target/debug/super-yaml` in the current workspace
+4. `rust/target/debug/super-yaml` in the current workspace
+5. `super-yaml` from `PATH`
+6. `cargo run --quiet --bin super-yaml -- validate <file>`
+
+## Bundling parser binaries into VSIX
+
+Put parser binaries under:
+
+- `bin/darwin-arm64/super-yaml`
+- `bin/darwin-x64/super-yaml`
+- `bin/linux-x64/super-yaml`
+- `bin/linux-arm64/super-yaml`
+- `bin/win32-x64/super-yaml.exe`
+- `bin/win32-arm64/super-yaml.exe`
+
+For local development on your current machine:
+
+```bash
+cd /Users/bradofrim/git/super_yaml/vscode-syaml
+npm run bundle:parser:local
+```
+
+## CI and release automation
+
+This repository includes GitHub Actions workflows for extension packaging:
+
+- `.github/workflows/ci.yml` runs Rust tests plus extension TypeScript compile on pushes/PRs.
+- `.github/workflows/vscode-extension-release.yml` builds parser binaries for multiple platforms, packages the VSIX, and publishes a GitHub release when a tag like `v0.1.0` is pushed.
 
 ## Local dev
 

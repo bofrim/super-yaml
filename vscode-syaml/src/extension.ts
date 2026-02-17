@@ -35,7 +35,7 @@ interface ExecError extends Error {
 
 export function activate(context: vscode.ExtensionContext): void {
   const diagnostics = vscode.languages.createDiagnosticCollection("syaml");
-  const validator = new SyamlValidator(diagnostics);
+  const validator = new SyamlValidator(diagnostics, context.extensionPath);
   const semanticProvider = new SyamlSemanticTokensProvider();
 
   context.subscriptions.push(diagnostics);
@@ -83,7 +83,10 @@ class SyamlValidator {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly runs = new Map<string, number>();
 
-  constructor(private readonly diagnostics: vscode.DiagnosticCollection) {}
+  constructor(
+    private readonly diagnostics: vscode.DiagnosticCollection,
+    private readonly extensionPath: string
+  ) {}
 
   schedule(document: vscode.TextDocument, reason: "change" | "open_or_save"): void {
     if (!isSyamlDocument(document)) {
@@ -153,7 +156,7 @@ class SyamlValidator {
   private async runValidation(
     document: vscode.TextDocument
   ): Promise<{ ok: true } | { ok: false; message: string }> {
-    const parser = await resolveParserCommand(document);
+    const parser = await resolveParserCommand(document, this.extensionPath);
 
     return withInputFile(document, async (inputPath) => {
       const args = [...parser.argPrefix, "validate", inputPath];
@@ -170,7 +173,7 @@ class SyamlValidator {
           return {
             ok: false,
             message:
-              "Cannot run SYAML parser. Set syaml.parser.path or install Rust/cargo."
+              "Cannot run SYAML parser. Set syaml.parser.path, install super-yaml, or install Rust/cargo."
           };
         }
 
@@ -338,7 +341,10 @@ function isSyamlDocument(document: vscode.TextDocument): boolean {
   return document.uri.fsPath.endsWith(".syaml");
 }
 
-async function resolveParserCommand(document: vscode.TextDocument): Promise<ParserCommand> {
+async function resolveParserCommand(
+  document: vscode.TextDocument,
+  extensionPath: string
+): Promise<ParserCommand> {
   const config = vscode.workspace.getConfiguration("syaml", document.uri);
   const configuredPath = config.get<string>("parser.path", "").trim();
   const workspace = vscode.workspace.getWorkspaceFolder(document.uri);
@@ -352,13 +358,35 @@ async function resolveParserCommand(document: vscode.TextDocument): Promise<Pars
     return { cwd, command: configuredPath, argPrefix: [] };
   }
 
+  const bundledBinary = await resolveBundledBinary(extensionPath);
+  if (bundledBinary) {
+    return { cwd, command: bundledBinary, argPrefix: [] };
+  }
+
   if (workspace) {
-    const localBinary = path.join(workspace.uri.fsPath, "target", "debug", "super-yaml");
-    if (await fileExists(localBinary)) {
-      return { cwd: workspace.uri.fsPath, command: localBinary, argPrefix: [] };
+    const binaryName = parserBinaryNameForPlatform(process.platform);
+    const localBinaryCandidates = [
+      path.join(workspace.uri.fsPath, "target", "debug", binaryName),
+      path.join(workspace.uri.fsPath, "rust", "target", "debug", binaryName)
+    ];
+    for (const localBinary of localBinaryCandidates) {
+      if (await fileExists(localBinary)) {
+        return { cwd: workspace.uri.fsPath, command: localBinary, argPrefix: [] };
+      }
     }
   }
 
+  // Prefer a standalone parser from PATH before falling back to cargo.
+  const pathBinary = await findInPath("super-yaml");
+  if (pathBinary) {
+    return {
+      cwd,
+      command: pathBinary,
+      argPrefix: []
+    };
+  }
+
+  // Last-resort fallback for local development in a Rust workspace.
   return {
     cwd,
     command: "cargo",
@@ -394,6 +422,55 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function parserBinaryNameForPlatform(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "super-yaml.exe" : "super-yaml";
+}
+
+async function resolveBundledBinary(extensionPath: string): Promise<string | null> {
+  const binaryName = parserBinaryNameForPlatform(process.platform);
+  const candidate = path.join(
+    extensionPath,
+    "bin",
+    `${process.platform}-${process.arch}`,
+    binaryName
+  );
+  if (!(await fileExists(candidate))) {
+    return null;
+  }
+
+  // VSIX extraction should preserve executable bits, but enforce it to avoid host differences.
+  if (process.platform !== "win32") {
+    try {
+      await fs.chmod(candidate, 0o755);
+    } catch {
+      // Ignore chmod failures and attempt execution as-is.
+    }
+  }
+
+  return candidate;
+}
+
+async function findInPath(commandName: string): Promise<string | null> {
+  const pathVar = process.env.PATH;
+  if (!pathVar) {
+    return null;
+  }
+
+  const candidateNames =
+    process.platform === "win32" ? [commandName, `${commandName}.exe`] : [commandName];
+  const segments = pathVar.split(path.delimiter).filter((segment) => segment.length > 0);
+  for (const segment of segments) {
+    for (const candidateName of candidateNames) {
+      const candidate = path.join(segment, candidateName);
+      if (await fileExists(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
 }
 
 function normalizeExecOutput(error: ExecError): string {

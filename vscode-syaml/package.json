@@ -19,6 +19,15 @@
     "onLanguage:syaml"
   ],
   "main": "./out/extension.js",
+  "files": [
+    "out/**",
+    "syntaxes/**",
+    "language-configuration.json",
+    "README.md",
+    "LICENSE",
+    "package.json",
+    "bin/**"
+  ],
   "contributes": {
     "languages": [
       {
@@ -46,7 +55,7 @@
         "syaml.parser.path": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the super-yaml parser binary. If empty, the extension tries ./target/debug/super-yaml and then cargo run."
+          "description": "Absolute path to the super-yaml parser binary. If empty, the extension tries bundled parser binaries, workspace binaries, super-yaml on PATH, then cargo run."
         },
         "syaml.validate.onType": {
           "type": "boolean",
@@ -64,6 +73,7 @@
     }
   },
   "scripts": {
+    "bundle:parser:local": "bash ./scripts/bundle-local-parser.sh",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./"
   },

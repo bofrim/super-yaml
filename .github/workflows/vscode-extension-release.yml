@@ -1,0 +1,146 @@
+name: Release VSIX
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-parser:
+    name: Build parser (${{ matrix.bin_dir }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_dir: linux-x64
+            bin_name: super-yaml
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            bin_dir: linux-arm64
+            bin_name: super-yaml
+          - os: macos-13
+            target: x86_64-apple-darwin
+            bin_dir: darwin-x64
+            bin_name: super-yaml
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bin_dir: darwin-arm64
+            bin_name: super-yaml
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_dir: win32-x64
+            bin_name: super-yaml.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            bin_dir: win32-arm64
+            bin_name: super-yaml.exe
+            experimental: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install linux arm64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build parser
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: cargo build --release --bin super-yaml --target ${{ matrix.target }}
+
+      - name: Build parser (linux arm64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cargo build --release --bin super-yaml --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p artifact/${{ matrix.bin_dir }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin_name }} artifact/${{ matrix.bin_dir }}/${{ matrix.bin_name }}
+
+      - name: Upload parser artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parser-${{ matrix.bin_dir }}
+          path: artifact/${{ matrix.bin_dir }}/${{ matrix.bin_name }}
+          if-no-files-found: error
+
+  package-vsix:
+    name: Package VSIX
+    runs-on: ubuntu-latest
+    needs: build-parser
+    defaults:
+      run:
+        working-directory: vscode-syaml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download parser artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: parser-*
+          merge-multiple: true
+          path: vscode-syaml/bin
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: vscode-syaml/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile extension
+        run: npm run compile
+
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce@latest package -o "syaml-language-${{ github.ref_name }}.vsix"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: syaml-vsix
+          path: vscode-syaml/syaml-language-${{ github.ref_name }}.vsix
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: package-vsix
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: syaml-vsix
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.vsix
+          generate_release_notes: true
