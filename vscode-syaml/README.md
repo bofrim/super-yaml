@@ -15,7 +15,6 @@ In order, the extension tries:
 3. `target/debug/super-yaml` in the current workspace
 4. `rust/target/debug/super-yaml` in the current workspace
 5. `super-yaml` from `PATH`
-6. `cargo run --quiet --bin super-yaml -- validate <file>`
 
 ## Bundling parser binaries into VSIX
 

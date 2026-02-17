@@ -156,7 +156,15 @@ class SyamlValidator {
   private async runValidation(
     document: vscode.TextDocument
   ): Promise<{ ok: true } | { ok: false; message: string }> {
-    const parser = await resolveParserCommand(document, this.extensionPath);
+    let parser: ParserCommand;
+    try {
+      parser = await resolveParserCommand(document, this.extensionPath);
+    } catch {
+      return {
+        ok: false,
+        message: "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+      };
+    }
 
     return withInputFile(document, async (inputPath) => {
       const args = [...parser.argPrefix, "validate", inputPath];
@@ -173,7 +181,7 @@ class SyamlValidator {
           return {
             ok: false,
             message:
-              "Cannot run SYAML parser. Set syaml.parser.path, install super-yaml, or install Rust/cargo."
+              "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
           };
         }
 
@@ -386,12 +394,7 @@ async function resolveParserCommand(
     };
   }
 
-  // Last-resort fallback for local development in a Rust workspace.
-  return {
-    cwd,
-    command: "cargo",
-    argPrefix: ["run", "--quiet", "--bin", "super-yaml", "--"]
-  };
+  throw new Error("SYAML parser binary not found");
 }
 
 async function withInputFile<T>(

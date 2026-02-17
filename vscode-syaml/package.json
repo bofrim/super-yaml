@@ -55,7 +55,7 @@
         "syaml.parser.path": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the super-yaml parser binary. If empty, the extension tries bundled parser binaries, workspace binaries, super-yaml on PATH, then cargo run."
+          "description": "Absolute path to the super-yaml parser binary. If empty, the extension tries bundled parser binaries, workspace binaries, then super-yaml on PATH."
         },
         "syaml.validate.onType": {
           "type": "boolean",

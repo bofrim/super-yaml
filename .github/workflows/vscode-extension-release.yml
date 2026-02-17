@@ -72,14 +72,14 @@ jobs:
       - name: Stage artifact
         shell: bash
         run: |
-          mkdir -p artifact/${{ matrix.bin_dir }}
-          cp target/${{ matrix.target }}/release/${{ matrix.bin_name }} artifact/${{ matrix.bin_dir }}/${{ matrix.bin_name }}
+          mkdir -p artifact/bin/${{ matrix.bin_dir }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin_name }} artifact/bin/${{ matrix.bin_dir }}/${{ matrix.bin_name }}
 
       - name: Upload parser artifact
         uses: actions/upload-artifact@v4
         with:
           name: parser-${{ matrix.bin_dir }}
-          path: artifact/${{ matrix.bin_dir }}/${{ matrix.bin_name }}
+          path: artifact/bin
           if-no-files-found: error
 
   package-vsix:
