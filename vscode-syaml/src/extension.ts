@@ -437,6 +437,11 @@ function extractDiagnosticMessage(rawOutput: string): string {
 }
 
 function diagnosticRange(document: vscode.TextDocument, message: string): vscode.Range {
+  const pathRange = inferPathRange(document, message);
+  if (pathRange) {
+    return pathRange;
+  }
+
   const absoluteLineNumber = inferAbsoluteLineNumber(document, message);
   if (!absoluteLineNumber) {
     return new vscode.Range(0, 0, 0, Math.max(1, document.lineAt(0).text.length));
@@ -445,6 +450,242 @@ function diagnosticRange(document: vscode.TextDocument, message: string): vscode
   const lineIndex = Math.max(0, Math.min(document.lineCount - 1, absoluteLineNumber - 1));
   const length = Math.max(1, document.lineAt(lineIndex).text.length);
   return new vscode.Range(lineIndex, 0, lineIndex, length);
+}
+
+interface DataKeyLocation {
+  path: string;
+  normalizedPath: string;
+  line: number;
+  start: number;
+  end: number;
+}
+
+interface ParseStackEntry {
+  indent: number;
+  path: string;
+}
+
+function inferPathRange(
+  document: vscode.TextDocument,
+  message: string
+): vscode.Range | undefined {
+  const path = extractJsonPathFromMessage(message);
+  if (!path) {
+    return undefined;
+  }
+
+  const normalizedTarget = normalizeJsonPath(path);
+  const locations = collectDataKeyLocations(document);
+  if (locations.length === 0) {
+    return undefined;
+  }
+
+  const exact = locations.find((loc) => loc.path === path);
+  if (exact) {
+    return new vscode.Range(exact.line, exact.start, exact.line, exact.end);
+  }
+
+  const normalized = locations.find((loc) => loc.normalizedPath === normalizedTarget);
+  if (normalized) {
+    return new vscode.Range(
+      normalized.line,
+      normalized.start,
+      normalized.line,
+      normalized.end
+    );
+  }
+
+  const segment = lastPathSegment(path);
+  if (!segment) {
+    return undefined;
+  }
+
+  const lineRegex = new RegExp(`^\\s*${escapeRegex(segment)}(?:\\s*<[^>]+>)?\\s*:`);
+  for (const loc of locations) {
+    const code = lineWithoutComment(document.lineAt(loc.line).text);
+    if (lineRegex.test(code)) {
+      return new vscode.Range(loc.line, loc.start, loc.line, loc.end);
+    }
+  }
+  return undefined;
+}
+
+function extractJsonPathFromMessage(message: string): string | undefined {
+  const patterns = [
+    /normalized\s+'(\$[A-Za-z0-9_.\[\]]+)'/i,
+    /\bat\s+'?(\$[A-Za-z0-9_.\[\]]+)'?/i,
+    /\bpath\s+'(\$[A-Za-z0-9_.\[\]]+)'/i
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(message);
+    if (match) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
+function normalizeJsonPath(path: string): string {
+  return path.replace(/\[\d+\]/g, "");
+}
+
+function lastPathSegment(path: string): string | undefined {
+  const withoutIndices = normalizeJsonPath(path);
+  const parts = withoutIndices.split(".").filter((part) => part.length > 0);
+  if (parts.length === 0) {
+    return undefined;
+  }
+  const last = parts[parts.length - 1];
+  return last === "$" ? undefined : last;
+}
+
+function collectDataKeyLocations(document: vscode.TextDocument): DataKeyLocation[] {
+  const bounds = findSectionBounds(document, "data");
+  if (!bounds) {
+    return [];
+  }
+
+  const locations: DataKeyLocation[] = [];
+  const stack: ParseStackEntry[] = [];
+  const arrayCounters = new Map<string, number>();
+
+  for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
+    const rawLine = document.lineAt(line).text;
+    const code = lineWithoutComment(rawLine);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const dashMatch = /^(\s*)-(\s*)(.*)$/.exec(code);
+    if (dashMatch) {
+      const dashIndent = dashMatch[1].length;
+      while (stack.length > 0 && stack[stack.length - 1].indent >= dashIndent) {
+        stack.pop();
+      }
+
+      const parentPath = stack.length > 0 ? stack[stack.length - 1].path : "$";
+      const counterKey = `${parentPath}|${dashIndent}`;
+      const itemIndex = arrayCounters.get(counterKey) ?? 0;
+      arrayCounters.set(counterKey, itemIndex + 1);
+      const itemPath = `${parentPath}[${itemIndex}]`;
+      stack.push({ indent: dashIndent, path: itemPath });
+
+      const rest = dashMatch[3];
+      const inlineKeyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(rest);
+      if (!inlineKeyMatch) {
+        continue;
+      }
+
+      const keyInfo = parseCanonicalKey(inlineKeyMatch[2]);
+      if (!keyInfo) {
+        continue;
+      }
+      const keyStart =
+        dashIndent +
+        1 +
+        dashMatch[2].length +
+        inlineKeyMatch[1].length +
+        keyInfo.keyOffset;
+      const childPath = `${itemPath}.${keyInfo.key}`;
+      locations.push({
+        path: childPath,
+        normalizedPath: normalizeJsonPath(childPath),
+        line,
+        start: keyStart,
+        end: keyStart + keyInfo.key.length
+      });
+      stack.push({
+        indent: dashIndent + 1 + dashMatch[2].length + inlineKeyMatch[1].length,
+        path: childPath
+      });
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+
+    const keyInfo = parseCanonicalKey(keyMatch[2]);
+    if (!keyInfo) {
+      continue;
+    }
+
+    const parentPath = stack.length > 0 ? stack[stack.length - 1].path : "$";
+    const path = `${parentPath}.${keyInfo.key}`;
+    const start = indent + keyInfo.keyOffset;
+    locations.push({
+      path,
+      normalizedPath: normalizeJsonPath(path),
+      line,
+      start,
+      end: start + keyInfo.key.length
+    });
+    stack.push({ indent, path });
+  }
+
+  return locations;
+}
+
+function parseCanonicalKey(
+  rawKey: string
+): { key: string; keyOffset: number } | undefined {
+  const trimmed = rawKey.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const typeMatch = /^(.*?)(\s*<\s*([A-Za-z_][\w.]*)\s*>)\s*$/.exec(trimmed);
+  const candidate = typeMatch ? typeMatch[1].trimEnd() : trimmed;
+  if (candidate.length === 0) {
+    return undefined;
+  }
+
+  const leadingWhitespace = rawKey.length - rawKey.trimStart().length;
+  return {
+    key: candidate,
+    keyOffset: leadingWhitespace
+  };
+}
+
+function findSectionBounds(
+  document: vscode.TextDocument,
+  sectionName: "front_matter" | "schema" | "data"
+): { startLine: number; endLine: number } | undefined {
+  const marker = `---${sectionName}`;
+  for (let i = 0; i < document.lineCount; i += 1) {
+    if (document.lineAt(i).text.trim() !== marker) {
+      continue;
+    }
+
+    let endLine = document.lineCount;
+    for (let j = i + 1; j < document.lineCount; j += 1) {
+      const lineText = document.lineAt(j).text.trim();
+      if (/^---(front_matter|schema|data)\s*$/.test(lineText)) {
+        endLine = j;
+        break;
+      }
+    }
+    return { startLine: i + 1, endLine };
+  }
+  return undefined;
+}
+
+function lineWithoutComment(text: string): string {
+  const commentStart = findCommentStart(text);
+  if (commentStart >= 0) {
+    return text.slice(0, commentStart);
+  }
+  return text;
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function inferAbsoluteLineNumber(
