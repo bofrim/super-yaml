@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "syaml-ext: compile",
+      "type": "npm",
+      "script": "compile",
+      "path": "vscode-syaml",
+      "group": "build",
+      "problemMatcher": [
+        "$tsc"
+      ]
+    }
+  ]
+}
