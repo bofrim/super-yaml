@@ -46,7 +46,9 @@ fn scan_sections_requires_marker_on_first_non_empty_line() {
 fn scan_sections_rejects_content_before_first_section() {
     let input = "---!syaml/v0\nhello\n---schema\ntypes: {}\n---data\na: 1\n";
     let err = scan_sections(input).unwrap_err();
-    assert!(err.to_string().contains("content before first section fence"));
+    assert!(err
+        .to_string()
+        .contains("content before first section fence"));
 }
 
 #[test]
@@ -55,8 +57,7 @@ fn scan_sections_rejects_unknown_duplicate_and_wrong_order() {
     let err = scan_sections(unknown).unwrap_err();
     assert!(err.to_string().contains("unknown section 'unknown'"));
 
-    let duplicate =
-        "---!syaml/v0\n---schema\ntypes: {}\n---schema\ntypes: {}\n---data\na: 1\n";
+    let duplicate = "---!syaml/v0\n---schema\ntypes: {}\n---schema\ntypes: {}\n---data\na: 1\n";
     let err = scan_sections(duplicate).unwrap_err();
     assert!(err.to_string().contains("duplicate section 'schema'"));
 
@@ -85,7 +86,9 @@ root:
 "#;
 
     let err = parse_document(input).unwrap_err();
-    assert!(err.to_string().contains("yaml parse error in section 'data'"));
+    assert!(err
+        .to_string()
+        .contains("yaml parse error in section 'data'"));
 }
 
 #[test]

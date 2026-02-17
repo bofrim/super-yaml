@@ -74,7 +74,11 @@ fn env_overrides_change_compiled_values() {
     let scaling = read_fixture("examples/service_scaling.syaml");
     let compiled = compile_document(
         &scaling,
-        &env_provider(&[("REGION", "eu-west-1"), ("CPU_CORES", "2"), ("BASE_PORT", "9100")]),
+        &env_provider(&[
+            ("REGION", "eu-west-1"),
+            ("CPU_CORES", "2"),
+            ("BASE_PORT", "9100"),
+        ]),
     )
     .unwrap();
 

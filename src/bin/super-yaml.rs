@@ -190,7 +190,9 @@ fn print_usage() {
     eprintln!("  super-yaml validate <file> [--allow-env KEY]...");
     eprintln!("  super-yaml compile <file> [--pretty] [--format json|yaml] [--allow-env KEY]...");
     eprintln!("  super-yaml compile <file> [--yaml|--json] [--allow-env KEY]...");
-    eprintln!("note: environment access is disabled by default; use --allow-env to permit specific keys.");
+    eprintln!(
+        "note: environment access is disabled by default; use --allow-env to permit specific keys."
+    );
 }
 
 #[cfg(test)]

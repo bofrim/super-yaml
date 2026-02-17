@@ -1,6 +1,7 @@
 //! Environment and expression resolution for parsed data.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::OnceLock;
 
 use regex::Regex;
 use serde_json::Value as JsonValue;
@@ -10,6 +11,10 @@ use crate::error::SyamlError;
 use crate::expr::eval::{evaluate, EvalContext, EvalError};
 use crate::expr::parse_expression;
 use crate::mini_yaml;
+
+const MAX_DERIVED_EXPRESSIONS: usize = 1024;
+const MAX_INTERPOLATIONS_PER_STRING: usize = 128;
+const MAX_EXPRESSION_SOURCE_LEN: usize = 4096;
 
 /// Environment lookup abstraction used during compilation.
 pub trait EnvProvider {
@@ -69,9 +74,9 @@ fn resolve_one_binding(
     env_provider: &dyn EnvProvider,
 ) -> Result<JsonValue, SyamlError> {
     if let Some(raw) = env_provider.get(&binding.key) {
-        parse_env_scalar(&raw).map_err(|e| {
+        parse_env_scalar(&raw).map_err(|_e| {
             SyamlError::EnvError(format!(
-                "failed to parse env '{}': {e}",
+                "failed to parse env '{}': invalid scalar value",
                 binding.key
             ))
         })
@@ -104,6 +109,13 @@ pub fn resolve_expressions(
 
     if expr_nodes.is_empty() {
         return Ok(());
+    }
+
+    if expr_nodes.len() > MAX_DERIVED_EXPRESSIONS {
+        return Err(SyamlError::ExpressionError(format!(
+            "too many derived expressions/interpolations: {} (max {MAX_DERIVED_EXPRESSIONS})",
+            expr_nodes.len()
+        )));
     }
 
     let mut unresolved: HashSet<String> = expr_nodes.iter().map(|n| n.path.clone()).collect();
@@ -187,7 +199,9 @@ fn eval_node(
 ) -> Result<JsonValue, EvalError> {
     let raw = node.raw.trim();
     if let Some(expr_source) = raw.strip_prefix('=') {
-        let parsed = parse_expression(expr_source.trim())?;
+        let source = expr_source.trim();
+        ensure_expression_source_len(source)?;
+        let parsed = parse_expression(source)?;
         let ctx = EvalContext {
             data,
             env,
@@ -206,18 +220,32 @@ fn evaluate_interpolation(
     env: &BTreeMap<String, JsonValue>,
     unresolved: &HashSet<String>,
 ) -> Result<JsonValue, EvalError> {
-    let all_re = Regex::new(r"\$\{([^}]+)\}").expect("valid regex");
-    let matches: Vec<(usize, usize, String)> = all_re
-        .captures_iter(raw)
-        .filter_map(|caps| {
-            let whole = caps.get(0)?;
-            let expr = caps.get(1)?.as_str().to_string();
-            Some((whole.start(), whole.end(), expr))
-        })
-        .collect();
+    let all_re = interpolation_regex();
+    let mut matches: Vec<(usize, usize, String)> = Vec::new();
+    for caps in all_re.captures_iter(raw) {
+        if matches.len() >= MAX_INTERPOLATIONS_PER_STRING {
+            return Err(SyamlError::ExpressionError(format!(
+                "too many interpolation segments in one string (max {MAX_INTERPOLATIONS_PER_STRING})"
+            ))
+            .into());
+        }
+        let whole = caps.get(0).ok_or_else(|| {
+            SyamlError::ExpressionError("invalid interpolation capture".to_string())
+        })?;
+        let expr = caps
+            .get(1)
+            .ok_or_else(|| {
+                SyamlError::ExpressionError("invalid interpolation capture".to_string())
+            })?
+            .as_str()
+            .to_string();
+        matches.push((whole.start(), whole.end(), expr));
+    }
 
     if matches.len() == 1 && matches[0].0 == 0 && matches[0].1 == raw.len() {
-        let parsed = parse_expression(matches[0].2.trim())?;
+        let source = matches[0].2.trim();
+        ensure_expression_source_len(source)?;
+        let parsed = parse_expression(source)?;
         let ctx = EvalContext {
             data,
             env,
@@ -230,15 +258,11 @@ fn evaluate_interpolation(
     let mut out = String::new();
     let mut last = 0usize;
 
-    for caps in all_re.captures_iter(raw) {
-        let m = caps.get(0).expect("whole match");
-        out.push_str(&raw[last..m.start()]);
-
-        let expr_source = caps.get(1).map(|mm| mm.as_str()).ok_or_else(|| {
-            SyamlError::ExpressionError("invalid interpolation capture".to_string())
-        })?;
-
-        let parsed = parse_expression(expr_source.trim())?;
+    for (start, end, expr_source) in matches {
+        out.push_str(&raw[last..start]);
+        let source = expr_source.trim();
+        ensure_expression_source_len(source)?;
+        let parsed = parse_expression(source)?;
         let ctx = EvalContext {
             data,
             env,
@@ -247,11 +271,26 @@ fn evaluate_interpolation(
         };
         let eval = evaluate(&parsed, &ctx)?;
         out.push_str(&json_to_string(&eval));
-        last = m.end();
+        last = end;
     }
 
     out.push_str(&raw[last..]);
     Ok(JsonValue::String(out))
+}
+
+fn interpolation_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\$\{([^}]+)\}").expect("valid regex"))
+}
+
+fn ensure_expression_source_len(source: &str) -> Result<(), EvalError> {
+    if source.len() > MAX_EXPRESSION_SOURCE_LEN {
+        return Err(SyamlError::ExpressionError(format!(
+            "expression exceeds max length ({MAX_EXPRESSION_SOURCE_LEN})"
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn json_to_string(value: &JsonValue) -> String {

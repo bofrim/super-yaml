@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 
-use serde_json::json;
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
 use super_yaml::ast::{EnvBinding, FrontMatter};
-use super_yaml::resolve::{get_json_path, resolve_env_bindings, resolve_expressions, MapEnvProvider};
+use super_yaml::resolve::{
+    get_json_path, resolve_env_bindings, resolve_expressions, MapEnvProvider,
+};
 
 fn env_provider(vars: &[(&str, &str)]) -> MapEnvProvider {
     let mut map = HashMap::new();
@@ -76,13 +78,39 @@ fn resolve_env_bindings_errors_for_missing_required_without_default() {
 
     let front_matter = FrontMatter { env: env_defs };
     let err = resolve_env_bindings(Some(&front_matter), &env_provider(&[])).unwrap_err();
-    assert!(err.to_string().contains("missing required environment variable"));
+    assert!(err
+        .to_string()
+        .contains("missing required environment variable"));
 }
 
 #[test]
 fn resolve_env_bindings_without_front_matter_returns_empty() {
     let resolved = resolve_env_bindings(None, &env_provider(&[])).unwrap();
     assert!(resolved.is_empty());
+}
+
+#[test]
+fn resolve_env_bindings_redacts_raw_values_in_parse_errors() {
+    let mut env_defs = BTreeMap::new();
+    env_defs.insert(
+        "BAD".to_string(),
+        EnvBinding {
+            key: "BAD_ENV".to_string(),
+            required: true,
+            default: None,
+        },
+    );
+
+    let front_matter = FrontMatter { env: env_defs };
+    let err = resolve_env_bindings(
+        Some(&front_matter),
+        &env_provider(&[("BAD_ENV", "\"unterminated")]),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("failed to parse env 'BAD_ENV'"));
+    assert!(!err.contains("\"unterminated"));
 }
 
 #[test]
@@ -204,4 +232,37 @@ fn resolve_expressions_supports_multi_pass_dependencies() {
     assert_eq!(data["b"], json!(3));
     assert_eq!(data["c"], json!(4));
     assert_eq!(data["d"], json!(5));
+}
+
+#[test]
+fn resolve_expressions_rejects_excessive_expression_nodes() {
+    let mut map = JsonMap::new();
+    for i in 0..1030 {
+        map.insert(format!("k{i}"), JsonValue::String("=1".to_string()));
+    }
+    let mut data = JsonValue::Object(map);
+    let env = BTreeMap::new();
+
+    let err = resolve_expressions(&mut data, &env).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("too many derived expressions/interpolations"));
+}
+
+#[test]
+fn resolve_expressions_rejects_too_many_interpolations_in_one_string() {
+    let mut message = String::new();
+    for _ in 0..129 {
+        message.push_str("${a}");
+    }
+    let mut data = json!({
+        "a": 1,
+        "msg": message
+    });
+    let env = BTreeMap::new();
+
+    let err = resolve_expressions(&mut data, &env).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("too many interpolation segments in one string"));
 }

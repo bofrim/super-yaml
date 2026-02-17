@@ -19,7 +19,10 @@ fn parse_schema_accepts_constraints_as_string_or_list() {
 
     let schema = parse_schema(&raw).unwrap();
     assert!(schema.types.contains_key("Port"));
-    assert_eq!(schema.constraints.get("replicas").unwrap(), &vec!["value >= 1".to_string()]);
+    assert_eq!(
+        schema.constraints.get("replicas").unwrap(),
+        &vec!["value >= 1".to_string()]
+    );
     assert_eq!(schema.constraints.get("workers").unwrap().len(), 2);
 }
 
@@ -185,7 +188,10 @@ fn validate_constraints_supports_paths_env_and_failures() {
 
     let mut constraints = BTreeMap::new();
     constraints.insert("replicas".to_string(), vec!["value >= 1".to_string()]);
-    constraints.insert("$.workers".to_string(), vec!["value == replicas * 2".to_string()]);
+    constraints.insert(
+        "$.workers".to_string(),
+        vec!["value == replicas * 2".to_string()],
+    );
     constraints.insert(
         "env_name".to_string(),
         vec!["value == env.EXPECTED_ENV".to_string()],
@@ -299,7 +305,9 @@ fn validate_json_against_schema_checks_exclusive_maximum() {
 #[test]
 fn parse_schema_rejects_bad_constraints_shape() {
     let err = parse_schema(&json!({"constraints": true})).unwrap_err();
-    assert!(err.to_string().contains("schema.constraints must be a mapping"));
+    assert!(err
+        .to_string()
+        .contains("schema.constraints must be a mapping"));
 }
 
 #[test]
@@ -359,12 +367,8 @@ fn validate_json_against_schema_allows_missing_optional_properties() {
 
 #[test]
 fn validate_json_against_schema_type_mismatch_is_reported() {
-    let err = validate_json_against_schema(
-        &json!("1"),
-        &json!({"type": "integer"}),
-        "$.count",
-    )
-    .unwrap_err();
+    let err = validate_json_against_schema(&json!("1"), &json!({"type": "integer"}), "$.count")
+        .unwrap_err();
 
     assert!(err.to_string().contains("type mismatch"));
 }
@@ -426,7 +430,9 @@ fn validate_json_against_schema_rejects_invalid_properties_shape() {
         "$",
     )
     .unwrap_err();
-    assert!(err.to_string().contains("properties at $ must be an object"));
+    assert!(err
+        .to_string()
+        .contains("properties at $ must be an object"));
 }
 
 #[test]
@@ -494,7 +500,9 @@ fn validate_constraints_rejects_nonexistent_nested_path() {
     constraints.insert("root.missing".to_string(), vec!["value == 1".to_string()]);
 
     let err = validate_constraints(&data, &env, &constraints).unwrap_err();
-    assert!(err.to_string().contains("constraint path 'root.missing' not found"));
+    assert!(err
+        .to_string()
+        .contains("constraint path 'root.missing' not found"));
 }
 
 #[test]
@@ -549,4 +557,28 @@ fn constraints_can_reference_root_paths() {
     constraints.insert("$.b".to_string(), vec!["value == a * 2".to_string()]);
 
     validate_constraints(&data, &env, &constraints).unwrap();
+}
+
+#[test]
+fn validate_constraints_rejects_too_many_expressions_for_path() {
+    let data = json!({"a": 1});
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert("a".to_string(), vec!["value == 1".to_string(); 129]);
+
+    let err = validate_constraints(&data, &env, &constraints).unwrap_err();
+    assert!(err.to_string().contains("too many constraints for path"));
+}
+
+#[test]
+fn validate_constraints_rejects_overlong_expression() {
+    let data = json!({"a": 1});
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert("a".to_string(), vec!["x".repeat(5000)]);
+
+    let err = validate_constraints(&data, &env, &constraints).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("constraint expression at '$.a' exceeds max length"));
 }

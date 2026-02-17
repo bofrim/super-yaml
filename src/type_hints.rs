@@ -9,6 +9,9 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::error::SyamlError;
 
+const MAX_NORMALIZE_DEPTH: usize = 64;
+const MAX_TYPE_HINTS: usize = 10_000;
+
 /// Normalizes a data value and extracts type hints.
 ///
 /// Returns `(normalized_data, hints_by_path)`.
@@ -16,7 +19,7 @@ pub fn normalize_data_with_hints(
     value: &JsonValue,
 ) -> Result<(JsonValue, BTreeMap<String, String>), SyamlError> {
     let mut hints = BTreeMap::new();
-    let normalized = normalize_value(value, "$", &mut hints)?;
+    let normalized = normalize_value(value, "$", &mut hints, 0)?;
     Ok((normalized, hints))
 }
 
@@ -24,7 +27,14 @@ fn normalize_value(
     value: &JsonValue,
     path: &str,
     hints: &mut BTreeMap<String, String>,
+    depth: usize,
 ) -> Result<JsonValue, SyamlError> {
+    if depth > MAX_NORMALIZE_DEPTH {
+        return Err(SyamlError::TypeHintError(format!(
+            "data nesting depth exceeds maximum ({MAX_NORMALIZE_DEPTH}) at {path}"
+        )));
+    }
+
     match value {
         JsonValue::Object(map) => {
             let mut out = JsonMap::new();
@@ -39,10 +49,18 @@ fn normalize_value(
                 }
 
                 if let Some(t) = hint {
+                    if hints.len() >= MAX_TYPE_HINTS {
+                        return Err(SyamlError::TypeHintError(format!(
+                            "type hint count exceeds maximum ({MAX_TYPE_HINTS})"
+                        )));
+                    }
                     hints.insert(child_path.clone(), t);
                 }
 
-                out.insert(canonical_key, normalize_value(v, &child_path, hints)?);
+                out.insert(
+                    canonical_key,
+                    normalize_value(v, &child_path, hints, depth + 1)?,
+                );
             }
             Ok(JsonValue::Object(out))
         }
@@ -50,7 +68,7 @@ fn normalize_value(
             let mut out = Vec::with_capacity(items.len());
             for (i, item) in items.iter().enumerate() {
                 let child_path = format!("{}[{}]", path, i);
-                out.push(normalize_value(item, &child_path, hints)?);
+                out.push(normalize_value(item, &child_path, hints, depth + 1)?);
             }
             Ok(JsonValue::Array(out))
         }

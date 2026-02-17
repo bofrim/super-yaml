@@ -73,7 +73,14 @@ fn supports_value_symbol_in_constraint_context() {
     let unresolved = HashSet::new();
     let current = json!({"min": 1, "max": 4});
 
-    let out = eval_with("value.min < value.max", &data, &env, &unresolved, Some(&current)).unwrap();
+    let out = eval_with(
+        "value.min < value.max",
+        &data,
+        &env,
+        &unresolved,
+        Some(&current),
+    )
+    .unwrap();
     assert_eq!(out, json!(true));
 }
 
@@ -83,11 +90,26 @@ fn supports_numeric_and_string_functions() {
     let env = BTreeMap::new();
     let unresolved = HashSet::new();
 
-    assert_eq!(eval_with("max(1, 9, 4)", &data, &env, &unresolved, None).unwrap(), json!(9));
-    assert_eq!(eval_with("min(1, 9, 4)", &data, &env, &unresolved, None).unwrap(), json!(1));
-    assert_eq!(eval_with("round(2.6)", &data, &env, &unresolved, None).unwrap(), json!(3));
-    assert_eq!(eval_with("len(nums)", &data, &env, &unresolved, None).unwrap(), json!(3));
-    assert_eq!(eval_with("len(name)", &data, &env, &unresolved, None).unwrap(), json!(3));
+    assert_eq!(
+        eval_with("max(1, 9, 4)", &data, &env, &unresolved, None).unwrap(),
+        json!(9)
+    );
+    assert_eq!(
+        eval_with("min(1, 9, 4)", &data, &env, &unresolved, None).unwrap(),
+        json!(1)
+    );
+    assert_eq!(
+        eval_with("round(2.6)", &data, &env, &unresolved, None).unwrap(),
+        json!(3)
+    );
+    assert_eq!(
+        eval_with("len(nums)", &data, &env, &unresolved, None).unwrap(),
+        json!(3)
+    );
+    assert_eq!(
+        eval_with("len(name)", &data, &env, &unresolved, None).unwrap(),
+        json!(3)
+    );
     assert_eq!(
         eval_with("coalesce(null, null, 5)", &data, &env, &unresolved, None).unwrap(),
         json!(5)
@@ -97,7 +119,9 @@ fn supports_numeric_and_string_functions() {
 #[test]
 fn parse_expression_rejects_trailing_tokens() {
     let err = parse_expression("1 2").unwrap_err();
-    assert!(err.to_string().contains("unexpected token after expression"));
+    assert!(err
+        .to_string()
+        .contains("unexpected token after expression"));
 }
 
 #[test]
@@ -110,6 +134,18 @@ fn parse_expression_rejects_single_equals() {
 fn parse_expression_rejects_dot_without_identifier() {
     let err = parse_expression("a.(1)").unwrap_err();
     assert!(err.to_string().contains("expected identifier after '.'"));
+}
+
+#[test]
+fn parse_expression_rejects_excessive_token_count() {
+    let mut expr = "1".to_string();
+    for _ in 0..1100 {
+        expr.push_str("+1");
+    }
+    let err = parse_expression(&expr).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("expression exceeds max token count"));
 }
 
 #[test]
@@ -178,7 +214,9 @@ fn evaluation_reports_function_errors() {
 
     let err = eval_with("len(123)", &data, &env, &unresolved, None).unwrap_err();
     match err {
-        EvalError::Fatal(e) => assert!(e.to_string().contains("len() expects string, array, or object")),
+        EvalError::Fatal(e) => assert!(e
+            .to_string()
+            .contains("len() expects string, array, or object")),
         other => panic!("expected fatal error, got {other:?}"),
     }
 }

@@ -389,6 +389,7 @@ cargo clippy --all-targets --all-features
 - only `from: env` bindings are supported
 - expression variable paths are dot-based object traversal
 - parser is a YAML subset, not full YAML
+- compilation enforces depth/size guardrails for expressions, constraints, and YAML structures
 
 ## License
 

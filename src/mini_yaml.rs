@@ -637,4 +637,29 @@ mod tests {
             json!({"env": {"from": "env", "key": "DB_HOST", "required": true}})
         );
     }
+
+    #[test]
+    fn rejects_duplicate_keys_in_inline_map() {
+        let input = "env: { key: DB_HOST, key: OTHER }\n";
+        let err = parse_document(input).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("duplicate key 'key' in inline object"));
+    }
+
+    #[test]
+    fn rejects_excessive_inline_nesting_depth() {
+        let mut input = String::from("value: ");
+        for _ in 0..70 {
+            input.push('[');
+        }
+        input.push('1');
+        for _ in 0..70 {
+            input.push(']');
+        }
+        input.push('\n');
+
+        let err = parse_document(&input).unwrap_err();
+        assert!(err.to_string().contains("maximum nesting depth exceeded"));
+    }
 }

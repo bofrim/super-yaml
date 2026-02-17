@@ -15,6 +15,8 @@ use serde_json::Value as JsonValue;
 use crate::ast::SchemaDoc;
 use crate::error::SyamlError;
 
+const MAX_SCHEMA_VALIDATION_DEPTH: usize = 64;
+
 /// Parses a `schema` section JSON value into [`SchemaDoc`].
 pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
     let map = value
@@ -99,6 +101,21 @@ pub fn validate_json_against_schema(
     schema: &JsonValue,
     path: &str,
 ) -> Result<(), SyamlError> {
+    validate_json_against_schema_inner(value, schema, path, 0)
+}
+
+fn validate_json_against_schema_inner(
+    value: &JsonValue,
+    schema: &JsonValue,
+    path: &str,
+    depth: usize,
+) -> Result<(), SyamlError> {
+    if depth > MAX_SCHEMA_VALIDATION_DEPTH {
+        return Err(SyamlError::SchemaError(format!(
+            "schema validation exceeded max depth ({MAX_SCHEMA_VALIDATION_DEPTH}) at {path}"
+        )));
+    }
+
     let schema_obj = schema.as_object().ok_or_else(|| {
         SyamlError::SchemaError(format!(
             "schema at {path} must be an object, found {schema:?}"
@@ -130,8 +147,8 @@ pub fn validate_json_against_schema(
 
     validate_numeric_keywords(value, schema_obj, path)?;
     validate_string_keywords(value, schema_obj, path)?;
-    validate_object_keywords(value, schema_obj, path)?;
-    validate_array_keywords(value, schema_obj, path)?;
+    validate_object_keywords(value, schema_obj, path, depth)?;
+    validate_array_keywords(value, schema_obj, path, depth)?;
 
     Ok(())
 }
@@ -248,6 +265,7 @@ fn validate_object_keywords(
     value: &JsonValue,
     schema: &serde_json::Map<String, JsonValue>,
     path: &str,
+    depth: usize,
 ) -> Result<(), SyamlError> {
     let obj = match value.as_object() {
         Some(v) => v,
@@ -277,7 +295,12 @@ fn validate_object_keywords(
         for (k, child_schema) in prop_map {
             if let Some(child_value) = obj.get(k) {
                 let child_path = format!("{}.{}", path, k);
-                validate_json_against_schema(child_value, child_schema, &child_path)?;
+                validate_json_against_schema_inner(
+                    child_value,
+                    child_schema,
+                    &child_path,
+                    depth + 1,
+                )?;
             }
         }
     }
@@ -289,6 +312,7 @@ fn validate_array_keywords(
     value: &JsonValue,
     schema: &serde_json::Map<String, JsonValue>,
     path: &str,
+    depth: usize,
 ) -> Result<(), SyamlError> {
     let arr = match value.as_array() {
         Some(v) => v,
@@ -322,7 +346,7 @@ fn validate_array_keywords(
     if let Some(items_schema) = schema.get("items") {
         for (idx, item) in arr.iter().enumerate() {
             let child_path = format!("{}[{}]", path, idx);
-            validate_json_against_schema(item, items_schema, &child_path)?;
+            validate_json_against_schema_inner(item, items_schema, &child_path, depth + 1)?;
         }
     }
 

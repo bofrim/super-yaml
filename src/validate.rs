@@ -12,6 +12,10 @@ use crate::expr::parse_expression;
 use crate::resolve::get_json_path;
 use crate::schema::{resolve_type_schema, validate_json_against_schema};
 
+const MAX_CONSTRAINT_PATHS: usize = 2048;
+const MAX_CONSTRAINTS_PER_PATH: usize = 128;
+const MAX_CONSTRAINT_EXPR_LEN: usize = 4096;
+
 /// Validates normalized data values against extracted type hints.
 ///
 /// Each hint path must exist in `data`, and each referenced type must resolve
@@ -41,7 +45,22 @@ pub fn validate_constraints(
     env: &BTreeMap<String, JsonValue>,
     constraints: &BTreeMap<String, Vec<String>>,
 ) -> Result<(), SyamlError> {
+    if constraints.len() > MAX_CONSTRAINT_PATHS {
+        return Err(SyamlError::ConstraintError(format!(
+            "too many constraint paths: {} (max {MAX_CONSTRAINT_PATHS})",
+            constraints.len()
+        )));
+    }
+
     for (path, expressions) in constraints {
+        if expressions.len() > MAX_CONSTRAINTS_PER_PATH {
+            return Err(SyamlError::ConstraintError(format!(
+                "too many constraints for path '{}': {} (max {MAX_CONSTRAINTS_PER_PATH})",
+                path,
+                expressions.len()
+            )));
+        }
+
         let normalized_path = normalize_path(path);
         let value = get_json_path(data, &normalized_path).ok_or_else(|| {
             SyamlError::ConstraintError(format!(
@@ -52,6 +71,12 @@ pub fn validate_constraints(
 
         for expression in expressions {
             let source = expression.trim().trim_start_matches('=').trim();
+            if source.len() > MAX_CONSTRAINT_EXPR_LEN {
+                return Err(SyamlError::ConstraintError(format!(
+                    "constraint expression at '{}' exceeds max length ({MAX_CONSTRAINT_EXPR_LEN})",
+                    normalized_path
+                )));
+            }
             let ast = parse_expression(source)?;
             let unresolved = HashSet::new();
             let ctx = EvalContext {
