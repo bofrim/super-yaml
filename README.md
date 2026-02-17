@@ -14,6 +14,11 @@ It combines:
 
 `super_yaml` is designed for configuration that should stay declarative but still support computed fields and validation. The format gives you enough expressiveness for real-world config while keeping parsing and behavior constrained.
 
+## Maintenance Status
+
+This is currently a personal project and is not actively maintained for external users.
+Issues and pull requests are welcome, but may not receive a response.
+
 ## Quick Start
 
 ### 1. Validate a document
@@ -384,3 +389,7 @@ cargo clippy --all-targets --all-features
 - only `from: env` bindings are supported
 - expression variable paths are dot-based object traversal
 - parser is a YAML subset, not full YAML
+
+## License
+
+MIT. See `LICENSE`.

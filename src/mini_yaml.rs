@@ -8,6 +8,18 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::error::SyamlError;
 
+const MAX_DOCUMENT_LINES: usize = 100_000;
+const MAX_CONTAINER_DEPTH: usize = 64;
+const MAX_COLLECTION_ITEMS: usize = 50_000;
+const MAX_INLINE_VALUE_LEN: usize = 64 * 1024;
+
+fn yaml_parse_error(message: String) -> SyamlError {
+    SyamlError::YamlParseError {
+        section: "unknown".to_string(),
+        message,
+    }
+}
+
 /// Parses a YAML-subset document body into JSON.
 pub fn parse_document(input: &str) -> Result<JsonValue, SyamlError> {
     let lines: Vec<Line<'_>> = input
@@ -15,6 +27,12 @@ pub fn parse_document(input: &str) -> Result<JsonValue, SyamlError> {
         .enumerate()
         .map(|(i, raw)| Line { number: i + 1, raw })
         .collect();
+
+    if lines.len() > MAX_DOCUMENT_LINES {
+        return Err(yaml_parse_error(format!(
+            "document exceeds max supported line count ({MAX_DOCUMENT_LINES})"
+        )));
+    }
 
     let mut idx = 0usize;
     while idx < lines.len() && is_ignorable(lines[idx].raw) {
@@ -26,12 +44,12 @@ pub fn parse_document(input: &str) -> Result<JsonValue, SyamlError> {
     }
 
     let indent = leading_spaces(lines[idx].raw);
-    parse_block(&lines, &mut idx, indent)
+    parse_block(&lines, &mut idx, indent, 0)
 }
 
 /// Parses a single scalar YAML-subset value into JSON.
 pub fn parse_scalar(input: &str) -> Result<JsonValue, SyamlError> {
-    parse_inline_value(input.trim())
+    parse_inline_value(input.trim(), 0)
 }
 
 #[derive(Clone, Copy)]
@@ -44,7 +62,14 @@ fn parse_block(
     lines: &[Line<'_>],
     idx: &mut usize,
     indent: usize,
+    depth: usize,
 ) -> Result<JsonValue, SyamlError> {
+    if depth > MAX_CONTAINER_DEPTH {
+        return Err(yaml_parse_error(format!(
+            "maximum nesting depth exceeded ({MAX_CONTAINER_DEPTH})"
+        )));
+    }
+
     while *idx < lines.len() && is_ignorable(lines[*idx].raw) {
         *idx += 1;
     }
@@ -70,11 +95,11 @@ fn parse_block(
 
     let trimmed = line.raw[indent..].trim_start();
     if trimmed.starts_with("- ") {
-        parse_sequence(lines, idx, indent)
+        parse_sequence(lines, idx, indent, depth)
     } else if has_unquoted_colon(trimmed) {
-        parse_mapping(lines, idx, indent)
+        parse_mapping(lines, idx, indent, depth)
     } else {
-        let value = parse_inline_value(trimmed)?;
+        let value = parse_inline_value(trimmed, depth + 1)?;
         *idx += 1;
         Ok(value)
     }
@@ -84,6 +109,7 @@ fn parse_mapping(
     lines: &[Line<'_>],
     idx: &mut usize,
     indent: usize,
+    depth: usize,
 ) -> Result<JsonValue, SyamlError> {
     let mut map = JsonMap::new();
 
@@ -145,14 +171,20 @@ fn parse_mapping(
                 if next_indent <= indent {
                     JsonValue::Null
                 } else {
-                    parse_block(lines, idx, next_indent)?
+                    parse_block(lines, idx, next_indent, depth + 1)?
                 }
             }
         } else {
-            parse_inline_value(value_raw)?
+            parse_inline_value(value_raw, depth + 1)?
         };
 
         map.insert(key, value);
+        if map.len() > MAX_COLLECTION_ITEMS {
+            return Err(yaml_parse_error(format!(
+                "mapping exceeds max item count ({MAX_COLLECTION_ITEMS}) at line {}",
+                line.number
+            )));
+        }
     }
 
     Ok(JsonValue::Object(map))
@@ -162,6 +194,7 @@ fn parse_sequence(
     lines: &[Line<'_>],
     idx: &mut usize,
     indent: usize,
+    depth: usize,
 ) -> Result<JsonValue, SyamlError> {
     let mut items = Vec::new();
 
@@ -206,20 +239,38 @@ fn parse_sequence(
                 if next_indent <= indent {
                     JsonValue::Null
                 } else {
-                    parse_block(lines, idx, next_indent)?
+                    parse_block(lines, idx, next_indent, depth + 1)?
                 }
             }
         } else {
-            parse_inline_value(rest)?
+            parse_inline_value(rest, depth + 1)?
         };
 
         items.push(value);
+        if items.len() > MAX_COLLECTION_ITEMS {
+            return Err(yaml_parse_error(format!(
+                "sequence exceeds max item count ({MAX_COLLECTION_ITEMS}) at line {}",
+                line.number
+            )));
+        }
     }
 
     Ok(JsonValue::Array(items))
 }
 
-fn parse_inline_value(raw: &str) -> Result<JsonValue, SyamlError> {
+fn parse_inline_value(raw: &str, depth: usize) -> Result<JsonValue, SyamlError> {
+    if depth > MAX_CONTAINER_DEPTH {
+        return Err(yaml_parse_error(format!(
+            "maximum nesting depth exceeded ({MAX_CONTAINER_DEPTH})"
+        )));
+    }
+
+    if raw.len() > MAX_INLINE_VALUE_LEN {
+        return Err(yaml_parse_error(format!(
+            "inline value exceeds max length ({MAX_INLINE_VALUE_LEN})"
+        )));
+    }
+
     let s = raw.trim();
     if s.is_empty() {
         return Ok(JsonValue::Null);
@@ -230,11 +281,11 @@ fn parse_inline_value(raw: &str) -> Result<JsonValue, SyamlError> {
     }
 
     if s.starts_with('{') {
-        return parse_inline_object(s);
+        return parse_inline_object(s, depth + 1);
     }
 
     if s.starts_with('[') {
-        return parse_inline_array(s);
+        return parse_inline_array(s, depth + 1);
     }
 
     if s == "true" {
@@ -262,7 +313,13 @@ fn parse_inline_value(raw: &str) -> Result<JsonValue, SyamlError> {
     Ok(JsonValue::String(strip_inline_comment(s).to_string()))
 }
 
-fn parse_inline_object(raw: &str) -> Result<JsonValue, SyamlError> {
+fn parse_inline_object(raw: &str, depth: usize) -> Result<JsonValue, SyamlError> {
+    if depth > MAX_CONTAINER_DEPTH {
+        return Err(yaml_parse_error(format!(
+            "maximum nesting depth exceeded ({MAX_CONTAINER_DEPTH})"
+        )));
+    }
+
     let Some(inner) = raw
         .trim()
         .strip_prefix('{')
@@ -288,14 +345,31 @@ fn parse_inline_object(raw: &str) -> Result<JsonValue, SyamlError> {
         })?;
 
         let key = parse_key(p[..colon].trim())?;
-        let value = parse_inline_value(p[colon + 1..].trim())?;
+        if map.contains_key(&key) {
+            return Err(yaml_parse_error(format!(
+                "duplicate key '{}' in inline object",
+                key
+            )));
+        }
+        let value = parse_inline_value(p[colon + 1..].trim(), depth + 1)?;
         map.insert(key, value);
+        if map.len() > MAX_COLLECTION_ITEMS {
+            return Err(yaml_parse_error(format!(
+                "inline object exceeds max item count ({MAX_COLLECTION_ITEMS})"
+            )));
+        }
     }
 
     Ok(JsonValue::Object(map))
 }
 
-fn parse_inline_array(raw: &str) -> Result<JsonValue, SyamlError> {
+fn parse_inline_array(raw: &str, depth: usize) -> Result<JsonValue, SyamlError> {
+    if depth > MAX_CONTAINER_DEPTH {
+        return Err(yaml_parse_error(format!(
+            "maximum nesting depth exceeded ({MAX_CONTAINER_DEPTH})"
+        )));
+    }
+
     let Some(inner) = raw
         .trim()
         .strip_prefix('[')
@@ -314,7 +388,12 @@ fn parse_inline_array(raw: &str) -> Result<JsonValue, SyamlError> {
         if p.is_empty() {
             continue;
         }
-        items.push(parse_inline_value(p)?);
+        items.push(parse_inline_value(p, depth + 1)?);
+        if items.len() > MAX_COLLECTION_ITEMS {
+            return Err(yaml_parse_error(format!(
+                "inline array exceeds max item count ({MAX_COLLECTION_ITEMS})"
+            )));
+        }
     }
 
     Ok(JsonValue::Array(items))
