@@ -26,11 +26,11 @@ jobs:
             target: aarch64-unknown-linux-gnu
             bin_dir: linux-arm64
             bin_name: super-yaml
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             bin_dir: darwin-x64
             bin_name: super-yaml
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             bin_dir: darwin-arm64
             bin_name: super-yaml
