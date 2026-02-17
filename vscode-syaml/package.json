@@ -1,0 +1,70 @@
+{
+  "name": "syaml-language",
+  "displayName": "SYAML Language Support",
+  "description": "Language support for .syaml files with parser-backed diagnostics.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:syaml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "syaml",
+        "aliases": [
+          "SYAML",
+          "syaml"
+        ],
+        "extensions": [
+          ".syaml"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "syaml",
+        "scopeName": "source.syaml",
+        "path": "./syntaxes/syaml.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "SYAML",
+      "properties": {
+        "syaml.parser.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the super-yaml parser binary. If empty, the extension tries ./target/debug/super-yaml and then cargo run."
+        },
+        "syaml.validate.onType": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate while typing (debounced)."
+        },
+        "syaml.validate.debounceMs": {
+          "type": "number",
+          "default": 400,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Debounce delay for on-type validation in milliseconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}
