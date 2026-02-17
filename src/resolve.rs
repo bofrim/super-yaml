@@ -1,3 +1,5 @@
+//! Environment and expression resolution for parsed data.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use regex::Regex;
@@ -9,10 +11,13 @@ use crate::expr::eval::{evaluate, EvalContext, EvalError};
 use crate::expr::parse_expression;
 use crate::mini_yaml;
 
+/// Environment lookup abstraction used during compilation.
 pub trait EnvProvider {
+    /// Returns the environment value for `key`, if available.
     fn get(&self, key: &str) -> Option<String>;
 }
 
+/// [`EnvProvider`] implementation backed by process environment variables.
 pub struct ProcessEnvProvider;
 
 impl EnvProvider for ProcessEnvProvider {
@@ -22,11 +27,13 @@ impl EnvProvider for ProcessEnvProvider {
 }
 
 #[derive(Debug, Clone)]
+/// [`EnvProvider`] implementation backed by a caller-provided map.
 pub struct MapEnvProvider {
     values: HashMap<String, String>,
 }
 
 impl MapEnvProvider {
+    /// Creates a new map-backed provider.
     pub fn new(values: HashMap<String, String>) -> Self {
         Self { values }
     }
@@ -38,6 +45,7 @@ impl EnvProvider for MapEnvProvider {
     }
 }
 
+/// Resolves all `front_matter.env` bindings into concrete JSON values.
 pub fn resolve_env_bindings(
     front_matter: Option<&FrontMatter>,
     env_provider: &dyn EnvProvider,
@@ -83,6 +91,10 @@ fn parse_env_scalar(raw: &str) -> Result<JsonValue, SyamlError> {
     mini_yaml::parse_scalar(raw)
 }
 
+/// Resolves derived expressions and interpolations within a JSON data tree in-place.
+///
+/// Strings that start with `=` are evaluated as full expressions.
+/// Strings containing `${...}` are treated as interpolations.
 pub fn resolve_expressions(
     data: &mut JsonValue,
     env: &BTreeMap<String, JsonValue>,
@@ -378,6 +390,7 @@ fn parse_path(path: &str) -> Result<Vec<PathSegment>, SyamlError> {
     Ok(out)
 }
 
+/// Gets a value by normalized JSON path (`$`, `$.a.b`, `$.items[0]`).
 pub fn get_json_path<'a>(root: &'a JsonValue, path: &str) -> Option<&'a JsonValue> {
     let segments = parse_path(path).ok()?;
     let mut current = root;

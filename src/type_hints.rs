@@ -1,9 +1,17 @@
+//! Type-hint extraction and data key normalization.
+//!
+//! Keys may declare a hint using `key <TypeName>`. During normalization,
+//! the key is rewritten to `key` and a hint entry is emitted for that path.
+
 use std::collections::BTreeMap;
 
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::error::SyamlError;
 
+/// Normalizes a data value and extracts type hints.
+///
+/// Returns `(normalized_data, hints_by_path)`.
 pub fn normalize_data_with_hints(
     value: &JsonValue,
 ) -> Result<(JsonValue, BTreeMap<String, String>), SyamlError> {

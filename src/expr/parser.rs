@@ -1,52 +1,88 @@
+//! Recursive-descent parser and AST for expressions.
+
 use crate::error::SyamlError;
 
 use super::lexer::{Token, TokenKind};
 
 #[derive(Debug, Clone)]
+/// Expression AST node.
 pub enum Expr {
+    /// Number literal.
     Number(f64),
+    /// String literal.
     String(String),
+    /// Boolean literal.
     Bool(bool),
+    /// Null literal.
     Null,
+    /// Variable reference path (for example `a.b.c`).
     Var(Vec<String>),
+    /// Unary operation.
     Unary {
+        /// Unary operator.
         op: UnaryOp,
+        /// Operand expression.
         expr: Box<Expr>,
     },
+    /// Binary operation.
     Binary {
+        /// Binary operator.
         op: BinaryOp,
+        /// Left operand.
         left: Box<Expr>,
+        /// Right operand.
         right: Box<Expr>,
     },
+    /// Function call expression.
     Call {
+        /// Function name.
         name: String,
+        /// Call argument expressions.
         args: Vec<Expr>,
     },
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Unary operators.
 pub enum UnaryOp {
+    /// Arithmetic negation (`-x`).
     Neg,
+    /// Boolean negation (`!x`).
     Not,
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Binary operators in the expression language.
 pub enum BinaryOp {
+    /// `+`
     Add,
+    /// `-`
     Sub,
+    /// `*`
     Mul,
+    /// `/`
     Div,
+    /// `%`
     Mod,
+    /// `==`
     Eq,
+    /// `!=`
     NotEq,
+    /// `<`
     Lt,
+    /// `<=`
     Lte,
+    /// `>`
     Gt,
+    /// `>=`
     Gte,
+    /// `&&`
     And,
+    /// `||`
     Or,
 }
 
+/// Parses token stream into an expression AST.
 pub fn parse(tokens: &[Token]) -> Result<Expr, SyamlError> {
     let mut parser = Parser { tokens, pos: 0 };
     let expr = parser.parse_or()?;

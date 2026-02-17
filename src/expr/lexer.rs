@@ -1,39 +1,70 @@
+//! Lexer for the `super_yaml` expression language.
+
 use crate::error::SyamlError;
 
 #[derive(Debug, Clone, PartialEq)]
+/// Token variants emitted by [`tokenize`].
 pub enum TokenKind {
+    /// Numeric literal.
     Number(f64),
+    /// Quoted string literal.
     String(String),
+    /// Boolean literal.
     Bool(bool),
+    /// `null` literal.
     Null,
+    /// Identifier segment for variables and function names.
     Ident(String),
+    /// `+`
     Plus,
+    /// `-`
     Minus,
+    /// `*`
     Star,
+    /// `/`
     Slash,
+    /// `%`
     Percent,
+    /// `(`
     LParen,
+    /// `)`
     RParen,
+    /// `,`
     Comma,
+    /// `.`
     Dot,
+    /// `!`
     Bang,
+    /// `==`
     EqEq,
+    /// `!=`
     NotEq,
+    /// `<`
     Lt,
+    /// `<=`
     Lte,
+    /// `>`
     Gt,
+    /// `>=`
     Gte,
+    /// `&&`
     AndAnd,
+    /// `||`
     OrOr,
+    /// End-of-input sentinel.
     Eof,
 }
 
 #[derive(Debug, Clone)]
+/// Single token with source byte position.
 pub struct Token {
+    /// Token classification and payload.
     pub kind: TokenKind,
+    /// Byte offset in original source string.
     pub pos: usize,
 }
 
+/// Tokenizes expression source code.
 pub fn tokenize(input: &str) -> Result<Vec<Token>, SyamlError> {
     let mut chars = input.char_indices().peekable();
     let mut tokens = Vec::new();

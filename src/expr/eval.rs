@@ -1,3 +1,5 @@
+//! Runtime evaluator for expression AST values.
+
 use std::collections::HashSet;
 
 use serde_json::{Number as JsonNumber, Value as JsonValue};
@@ -8,8 +10,11 @@ use crate::error::SyamlError;
 use super::parser::{BinaryOp, Expr, UnaryOp};
 
 #[derive(Debug)]
+/// Evaluation-time error classification.
 pub enum EvalError {
+    /// Dependency is not resolved yet; caller should retry later.
     Unresolved(String),
+    /// Non-recoverable expression error.
     Fatal(SyamlError),
 }
 
@@ -19,13 +24,19 @@ impl From<SyamlError> for EvalError {
     }
 }
 
+/// Context object passed to expression evaluation.
 pub struct EvalContext<'a> {
+    /// Root resolved/partially-resolved data tree.
     pub data: &'a JsonValue,
+    /// Resolved environment symbol map.
     pub env: &'a BTreeMap<String, JsonValue>,
+    /// Paths still pending resolution (used for cycle/dependency handling).
     pub unresolved_paths: &'a HashSet<String>,
+    /// Current `value` target for constraint expressions.
     pub current_value: Option<&'a JsonValue>,
 }
 
+/// Evaluates an expression AST node into a JSON value.
 pub fn evaluate(expr: &Expr, ctx: &EvalContext<'_>) -> Result<JsonValue, EvalError> {
     match expr {
         Expr::Number(n) => number(*n),

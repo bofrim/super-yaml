@@ -1,3 +1,12 @@
+//! Schema parsing and schema-based validation helpers.
+//!
+//! Supported keyword subset:
+//! - Common: `type`, `enum`
+//! - Numeric: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
+//! - String: `minLength`, `maxLength`, `pattern`
+//! - Object: `properties`, `required`
+//! - Array: `items`, `minItems`, `maxItems`
+
 use std::collections::BTreeMap;
 
 use regex::Regex;
@@ -6,6 +15,7 @@ use serde_json::Value as JsonValue;
 use crate::ast::SchemaDoc;
 use crate::error::SyamlError;
 
+/// Parses a `schema` section JSON value into [`SchemaDoc`].
 pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
     let map = value
         .as_object()
@@ -58,6 +68,11 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
     Ok(SchemaDoc { types, constraints })
 }
 
+/// Resolves a type name to a schema object.
+///
+/// If `type_name` exists in `schema.types`, that definition is returned.
+/// Otherwise, built-in primitive names (`string`, `integer`, etc.) are mapped
+/// to a schema object `{ "type": "<name>" }`.
 pub fn resolve_type_schema(schema: &SchemaDoc, type_name: &str) -> Result<JsonValue, SyamlError> {
     if let Some(found) = schema.types.get(type_name) {
         return Ok(found.clone());
@@ -76,6 +91,9 @@ pub fn resolve_type_schema(schema: &SchemaDoc, type_name: &str) -> Result<JsonVa
     )))
 }
 
+/// Validates a JSON value against a schema object at a logical path.
+///
+/// `path` is used only for error messages.
 pub fn validate_json_against_schema(
     value: &JsonValue,
     schema: &JsonValue,

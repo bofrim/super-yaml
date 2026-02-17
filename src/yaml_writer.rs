@@ -1,5 +1,10 @@
+//! JSON-to-YAML renderer for compiled output.
+
 use serde_json::Value as JsonValue;
 
+/// Renders a JSON value to YAML text.
+///
+/// Output is stable and always ends with a trailing newline.
 pub fn to_yaml_string(value: &JsonValue) -> String {
     let mut out = String::new();
     write_value(value, 0, &mut out);

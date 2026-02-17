@@ -1,17 +1,27 @@
+//! Scanner for top-level document marker and section fences.
+
 use regex::Regex;
 
 use crate::error::SyamlError;
 
 #[derive(Debug, Clone)]
+/// A named document section extracted from the source text.
 pub struct Section {
+    /// Section name (for example `schema` or `data`).
     pub name: String,
+    /// Raw section body between this fence and the next.
     pub body: String,
+    /// 1-based starting line number of section body.
     pub start_line: usize,
+    /// 1-based ending line number (exclusive).
     pub end_line: usize,
 }
 
 const MARKER: &str = "---!syaml/v0";
 
+/// Scans a `.syaml` source document into `(version, ordered sections)`.
+///
+/// Validates marker presence, allowed section names, uniqueness, and required order.
 pub fn scan_sections(input: &str) -> Result<(String, Vec<Section>), SyamlError> {
     let lines: Vec<&str> = input.lines().collect();
     let mut first_non_empty = None;

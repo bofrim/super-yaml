@@ -1,12 +1,35 @@
+//! `super_yaml` compiles sectioned `.syaml` documents into resolved JSON or YAML.
+//!
+//! A document goes through these stages:
+//! 1. Section scanning and shape validation (`---!syaml/v0`, section order, required sections).
+//! 2. Parsing section bodies with the built-in YAML subset parser.
+//! 3. Schema extraction and type-hint normalization.
+//! 4. Environment binding resolution.
+//! 5. Derived expression/interpolation resolution.
+//! 6. Type-hint and constraint validation.
+//!
+//! Use [`compile_document`] for full compilation, [`validate_document`] for validation-only
+//! workflows, or [`compile_document_to_json`] / [`compile_document_to_yaml`] for serialized output.
+
+/// Abstract syntax tree and compiled document container types.
 pub mod ast;
+/// Error types used throughout parsing, compilation, and validation.
 pub mod error;
+/// Expression lexer/parser/evaluator used by derived values and constraints.
 pub mod expr;
+/// Minimal YAML subset parser used for section bodies.
 pub mod mini_yaml;
+/// Environment and expression resolution over parsed data.
 pub mod resolve;
+/// Schema parsing and schema-based validation helpers.
 pub mod schema;
+/// Top-level section marker scanner and order validator.
 pub mod section_scanner;
+/// Type-hint extraction (`key <Type>`) and normalization.
 pub mod type_hints;
+/// Constraint and type-hint validation routines.
 pub mod validate;
+/// JSON-to-YAML renderer used by compiled YAML output.
 pub mod yaml_writer;
 
 use std::collections::BTreeMap;
@@ -22,6 +45,11 @@ use section_scanner::scan_sections;
 use type_hints::normalize_data_with_hints;
 use validate::{validate_constraints, validate_type_hints};
 
+/// Parses a `.syaml` document into its structured representation.
+///
+/// This performs marker and section validation, section body parsing, schema parsing,
+/// and data type-hint normalization. It does not resolve expressions or environment
+/// bindings and does not run constraints.
 pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
     let (version, sections) = scan_sections(input)?;
 
@@ -58,6 +86,10 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
     })
 }
 
+/// Compiles a `.syaml` document into resolved data.
+///
+/// Compilation includes expression resolution, environment substitution, type-hint
+/// checks, and constraint evaluation.
 pub fn compile_document(
     input: &str,
     env_provider: &dyn EnvProvider,
@@ -76,10 +108,16 @@ pub fn compile_document(
     })
 }
 
+/// Validates a `.syaml` document without returning compiled output.
+///
+/// This runs the full compilation pipeline and discards the result.
 pub fn validate_document(input: &str, env_provider: &dyn EnvProvider) -> Result<(), SyamlError> {
     compile_document(input, env_provider).map(|_| ())
 }
 
+/// Compiles a `.syaml` document and returns JSON text.
+///
+/// Set `pretty` to `true` to emit pretty-printed JSON.
 pub fn compile_document_to_json(
     input: &str,
     env_provider: &dyn EnvProvider,
@@ -89,6 +127,7 @@ pub fn compile_document_to_json(
     compiled.to_json_string(pretty)
 }
 
+/// Compiles a `.syaml` document and returns YAML text.
 pub fn compile_document_to_yaml(
     input: &str,
     env_provider: &dyn EnvProvider,

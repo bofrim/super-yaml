@@ -1,3 +1,5 @@
+//! Validation passes for type hints and schema constraints.
+
 use std::collections::HashSet;
 
 use serde_json::Value as JsonValue;
@@ -10,6 +12,10 @@ use crate::expr::parse_expression;
 use crate::resolve::get_json_path;
 use crate::schema::{resolve_type_schema, validate_json_against_schema};
 
+/// Validates normalized data values against extracted type hints.
+///
+/// Each hint path must exist in `data`, and each referenced type must resolve
+/// either to a named type in `schema.types` or to a built-in primitive type.
 pub fn validate_type_hints(
     data: &JsonValue,
     hints: &BTreeMap<String, String>,
@@ -26,6 +32,10 @@ pub fn validate_type_hints(
     Ok(())
 }
 
+/// Evaluates schema constraints against data and environment context.
+///
+/// Constraints are keyed by path and must evaluate to boolean values.
+/// Paths may be absolute (`$.a.b`) or shorthand (`a.b`).
 pub fn validate_constraints(
     data: &JsonValue,
     env: &BTreeMap<String, JsonValue>,

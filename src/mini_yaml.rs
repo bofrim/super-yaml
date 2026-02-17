@@ -1,7 +1,14 @@
+//! Minimal YAML subset parser used for `.syaml` sections.
+//!
+//! This parser supports mappings, sequences, basic scalars, quoted strings,
+//! and inline `{...}` / `[...]` collections. It is intentionally limited and
+//! tailored for predictable configuration parsing.
+
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::error::SyamlError;
 
+/// Parses a YAML-subset document body into JSON.
 pub fn parse_document(input: &str) -> Result<JsonValue, SyamlError> {
     let lines: Vec<Line<'_>> = input
         .lines()
@@ -22,6 +29,7 @@ pub fn parse_document(input: &str) -> Result<JsonValue, SyamlError> {
     parse_block(&lines, &mut idx, indent)
 }
 
+/// Parses a single scalar YAML-subset value into JSON.
 pub fn parse_scalar(input: &str) -> Result<JsonValue, SyamlError> {
     parse_inline_value(input.trim())
 }
