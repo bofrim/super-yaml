@@ -1,0 +1,13 @@
+{
+  "inventory": {
+    "daily_demand": 3.5,
+    "lead_days": 7,
+    "notes": "sku=WIDGET-XL, target=45",
+    "on_hand": 42,
+    "reorder_point": 20,
+    "sku": "WIDGET-XL",
+    "status": "active",
+    "target_stock": 45
+  },
+  "store_code": "SFO-001"
+}

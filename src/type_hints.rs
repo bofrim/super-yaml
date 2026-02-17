@@ -1,0 +1,110 @@
+use std::collections::BTreeMap;
+
+use serde_json::{Map as JsonMap, Value as JsonValue};
+
+use crate::error::SyamlError;
+
+pub fn normalize_data_with_hints(
+    value: &JsonValue,
+) -> Result<(JsonValue, BTreeMap<String, String>), SyamlError> {
+    let mut hints = BTreeMap::new();
+    let normalized = normalize_value(value, "$", &mut hints)?;
+    Ok((normalized, hints))
+}
+
+fn normalize_value(
+    value: &JsonValue,
+    path: &str,
+    hints: &mut BTreeMap<String, String>,
+) -> Result<JsonValue, SyamlError> {
+    match value {
+        JsonValue::Object(map) => {
+            let mut out = JsonMap::new();
+            for (key_str, v) in map {
+                let (canonical_key, hint) = split_key_and_hint(key_str)?;
+                let child_path = format!("{}.{}", path, canonical_key);
+                if out.contains_key(&canonical_key) {
+                    return Err(SyamlError::TypeHintError(format!(
+                        "duplicate canonical key '{}' at {path}",
+                        canonical_key
+                    )));
+                }
+
+                if let Some(t) = hint {
+                    hints.insert(child_path.clone(), t);
+                }
+
+                out.insert(canonical_key, normalize_value(v, &child_path, hints)?);
+            }
+            Ok(JsonValue::Object(out))
+        }
+        JsonValue::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                let child_path = format!("{}[{}]", path, i);
+                out.push(normalize_value(item, &child_path, hints)?);
+            }
+            Ok(JsonValue::Array(out))
+        }
+        _ => Ok(value.clone()),
+    }
+}
+
+fn split_key_and_hint(raw: &str) -> Result<(String, Option<String>), SyamlError> {
+    let trimmed = raw.trim();
+    if !trimmed.ends_with('>') {
+        return Ok((trimmed.to_string(), None));
+    }
+
+    let lt = match trimmed.rfind('<') {
+        Some(i) => i,
+        None => return Ok((trimmed.to_string(), None)),
+    };
+
+    if lt == 0 || lt + 1 >= trimmed.len() {
+        return Ok((trimmed.to_string(), None));
+    }
+
+    let base = trimmed[..lt].trim_end();
+    let hint = &trimmed[lt + 1..trimmed.len() - 1];
+    if base.is_empty() {
+        return Err(SyamlError::TypeHintError(format!(
+            "invalid type hint key '{}': missing key name",
+            raw
+        )));
+    }
+
+    if hint.is_empty() {
+        return Err(SyamlError::TypeHintError(format!(
+            "invalid type hint key '{}': missing type name",
+            raw
+        )));
+    }
+
+    if !hint
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_alphabetic() || c == '_')
+        .unwrap_or(false)
+        || !hint.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Ok((trimmed.to_string(), None));
+    }
+
+    Ok((base.to_string(), Some(hint.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::normalize_data_with_hints;
+
+    #[test]
+    fn extracts_type_hints() {
+        let json = json!({"name <string>": "a", "count <integer>": 2});
+        let (_data, hints) = normalize_data_with_hints(&json).unwrap();
+        assert_eq!(hints.get("$.name").unwrap(), "string");
+        assert_eq!(hints.get("$.count").unwrap(), "integer");
+    }
+}

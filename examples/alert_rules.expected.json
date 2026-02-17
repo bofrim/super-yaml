@@ -1,0 +1,10 @@
+{
+  "alert_count": 3,
+  "rules": [
+    "latency_p95 > 300",
+    "error_rate > 0.02",
+    "queue_depth > 500"
+  ],
+  "service": "search",
+  "summary": "search has 3 alert rules"
+}

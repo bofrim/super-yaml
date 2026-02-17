@@ -1,0 +1,22 @@
+---!syaml/v0
+---schema
+types:
+  RuleList:
+    type: array
+    minItems: 2
+    items:
+      type: string
+constraints:
+  rules:
+    - "len(value) >= 2"
+  alert_count:
+    - "value == len(rules)"
+
+---data
+service <string>: search
+rules <RuleList>:
+  - latency_p95 > 300
+  - error_rate > 0.02
+  - queue_depth > 500
+alert_count <integer>: "=len(rules)"
+summary <string>: "${service} has ${alert_count} alert rules"

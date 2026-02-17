@@ -1,0 +1,7 @@
+{
+  "host": "localhost",
+  "max_connections": 600,
+  "port": 5432,
+  "replicas": 3,
+  "worker_threads": 8
+}

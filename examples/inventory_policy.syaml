@@ -1,0 +1,32 @@
+---!syaml/v0
+---front_matter
+env:
+  STORE_CODE:
+    from: env
+    key: STORE_CODE
+    default: SFO-001
+
+---schema
+types:
+  PositiveInt:
+    type: integer
+    minimum: 1
+constraints:
+  inventory.reorder_point:
+    - "value >= 1"
+  inventory.target_stock:
+    - "value >= inventory.reorder_point"
+  inventory.lead_days:
+    - "value <= 30"
+
+---data
+store_code <string>: "${env.STORE_CODE}"
+inventory:
+  sku <string>: WIDGET-XL
+  on_hand <PositiveInt>: 42
+  reorder_point <PositiveInt>: 20
+  lead_days <PositiveInt>: 7
+  daily_demand <number>: 3.5
+  target_stock <PositiveInt>: "=round(inventory.daily_demand * inventory.lead_days + inventory.reorder_point)"
+  status <string>: "=coalesce(null, \"active\")"
+  notes <string>: "sku=${inventory.sku}, target=${inventory.target_stock}"

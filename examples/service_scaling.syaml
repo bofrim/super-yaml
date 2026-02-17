@@ -1,0 +1,38 @@
+---!syaml/v0
+---front_matter
+env:
+  REGION:
+    from: env
+    key: REGION
+    default: us-east-1
+  CPU_CORES:
+    from: env
+    key: CPU_CORES
+    default: 6
+  BASE_PORT:
+    from: env
+    key: BASE_PORT
+    default: 7000
+
+---schema
+types:
+  Port:
+    type: integer
+    minimum: 1
+    maximum: 65535
+constraints:
+  replicas:
+    - "value >= 1"
+  worker_threads:
+    - "value >= replicas"
+  http_port:
+    - "value > grpc_port"
+
+---data
+service_name <string>: billing
+region <string>: "${env.REGION}"
+replicas <integer>: 3
+worker_threads <integer>: "=max(replicas, env.CPU_CORES * 2)"
+grpc_port <Port>: "${env.BASE_PORT}"
+http_port <Port>: "=grpc_port + 1"
+public_url <string>: "https://${region}.example.internal:${http_port}"

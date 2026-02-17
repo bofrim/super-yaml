@@ -1,0 +1,18 @@
+[package]
+name = "super_yaml"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "super_yaml"
+path = "src/lib.rs"
+
+[[bin]]
+name = "super-yaml"
+path = "src/bin/super-yaml.rs"
+
+[dependencies]
+regex = "=1.12.3"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = { version = "=1.0.149" }
+thiserror = "=1.0.69"

@@ -1,0 +1,30 @@
+---!syaml/v0
+---front_matter
+env:
+  DB_HOST:
+    from: env
+    key: DB_HOST
+    default: localhost
+  CPU_CORES:
+    from: env
+    key: CPU_CORES
+    default: 4
+
+---schema
+types:
+  Port:
+    type: integer
+    minimum: 1
+    maximum: 65535
+constraints:
+  replicas:
+    - "value >= 1"
+  max_connections:
+    - "value % replicas == 0"
+
+---data
+host <string>: "${env.DB_HOST}"
+port <Port>: 5432
+replicas <integer>: 3
+worker_threads <integer>: "=max(2, env.CPU_CORES * 2)"
+max_connections <integer>: "=replicas * worker_threads * 25"

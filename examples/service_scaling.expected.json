@@ -1,0 +1,9 @@
+{
+  "grpc_port": 7000,
+  "http_port": 7001,
+  "public_url": "https://us-east-1.example.internal:7001",
+  "region": "us-east-1",
+  "replicas": 3,
+  "service_name": "billing",
+  "worker_threads": 12
+}

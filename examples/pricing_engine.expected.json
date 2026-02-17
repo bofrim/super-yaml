@@ -1,0 +1,11 @@
+{
+  "currency": "USD",
+  "discount_amount": 36,
+  "discount_rate": 0.15,
+  "final_total": 221,
+  "subtotal": 240,
+  "summary": "USD 221",
+  "tax_amount": 17,
+  "tax_rate": 0.0825,
+  "taxable_subtotal": 204
+}
