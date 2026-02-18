@@ -37,6 +37,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const diagnostics = vscode.languages.createDiagnosticCollection("syaml");
   const validator = new SyamlValidator(diagnostics, context.extensionPath);
   const semanticProvider = new SyamlSemanticTokensProvider();
+  const typeDefinitionProvider = new SyamlTypeDefinitionProvider();
+  const typeReferenceProvider = new SyamlTypeReferenceProvider();
 
   context.subscriptions.push(diagnostics);
   context.subscriptions.push(
@@ -44,6 +46,18 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: "syaml" },
       semanticProvider,
       TOKEN_LEGEND
+    )
+  );
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider(
+      { language: "syaml" },
+      typeDefinitionProvider
+    )
+  );
+  context.subscriptions.push(
+    vscode.languages.registerReferenceProvider(
+      { language: "syaml" },
+      typeReferenceProvider
     )
   );
 
@@ -275,6 +289,73 @@ class SyamlSemanticTokensProvider
   }
 }
 
+interface TypeOccurrence {
+  name: string;
+  range: vscode.Range;
+  kind: "definition" | "reference";
+}
+
+class SyamlTypeDefinitionProvider implements vscode.DefinitionProvider {
+  provideDefinition(
+    document: vscode.TextDocument,
+    position: vscode.Position
+  ): vscode.ProviderResult<vscode.Definition> {
+    if (!isSyamlDocument(document)) {
+      return undefined;
+    }
+
+    const occurrences = collectTypeOccurrences(document);
+    const target = findTypeOccurrenceAtPosition(occurrences, position);
+    if (!target) {
+      return undefined;
+    }
+
+    const definitions = occurrences.filter(
+      (occurrence) =>
+        occurrence.kind === "definition" && occurrence.name === target.name
+    );
+    if (definitions.length === 0) {
+      return undefined;
+    }
+
+    return definitions.map(
+      (definition) => new vscode.Location(document.uri, definition.range)
+    );
+  }
+}
+
+class SyamlTypeReferenceProvider implements vscode.ReferenceProvider {
+  provideReferences(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    context: vscode.ReferenceContext
+  ): vscode.ProviderResult<vscode.Location[]> {
+    if (!isSyamlDocument(document)) {
+      return undefined;
+    }
+
+    const occurrences = collectTypeOccurrences(document);
+    const target = findTypeOccurrenceAtPosition(occurrences, position);
+    if (!target) {
+      return undefined;
+    }
+
+    const references = occurrences.filter((occurrence) => {
+      if (occurrence.name !== target.name) {
+        return false;
+      }
+      if (context.includeDeclaration) {
+        return true;
+      }
+      return occurrence.kind !== "definition";
+    });
+
+    return references.map(
+      (reference) => new vscode.Location(document.uri, reference.range)
+    );
+  }
+}
+
 class TokenCollector {
   private readonly tokens: Array<{
     line: number;
@@ -337,6 +418,180 @@ function collectRegexTokens(
       break;
     }
   }
+}
+
+function collectTypeOccurrences(document: vscode.TextDocument): TypeOccurrence[] {
+  return [
+    ...collectTypeDefinitions(document),
+    ...collectTypeHintReferences(document)
+  ];
+}
+
+function collectTypeDefinitions(document: vscode.TextDocument): TypeOccurrence[] {
+  const bounds = findSectionBounds(document, "schema");
+  if (!bounds) {
+    return [];
+  }
+
+  const occurrences: TypeOccurrence[] = [];
+  let inTypesSection = false;
+  let typesIndent = -1;
+  let typeEntryIndent: number | undefined;
+
+  for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    const rawKey = keyMatch[2];
+    const keyName = rawKey.trim();
+
+    if (!inTypesSection) {
+      if (keyName === "types") {
+        inTypesSection = true;
+        typesIndent = indent;
+        typeEntryIndent = undefined;
+      }
+      continue;
+    }
+
+    if (indent <= typesIndent) {
+      if (keyName === "types") {
+        inTypesSection = true;
+        typesIndent = indent;
+        typeEntryIndent = undefined;
+      } else {
+        inTypesSection = false;
+      }
+      continue;
+    }
+
+    if (typeEntryIndent === undefined) {
+      typeEntryIndent = indent;
+    }
+    if (indent !== typeEntryIndent) {
+      continue;
+    }
+
+    const type = parseTypeDefinitionName(rawKey);
+    if (!type) {
+      continue;
+    }
+
+    const start = indent + type.offset;
+    occurrences.push({
+      name: type.name,
+      range: new vscode.Range(line, start, line, start + type.name.length),
+      kind: "definition"
+    });
+  }
+
+  return occurrences;
+}
+
+function collectTypeHintReferences(document: vscode.TextDocument): TypeOccurrence[] {
+  const bounds = findSectionBounds(document, "data");
+  if (!bounds) {
+    return [];
+  }
+
+  const occurrences: TypeOccurrence[] = [];
+  for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const dashMatch = /^(\s*)-(\s*)(.*)$/.exec(code);
+    if (dashMatch) {
+      const inlineKeyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(dashMatch[3]);
+      if (inlineKeyMatch) {
+        const keyOffset =
+          dashMatch[1].length +
+          1 +
+          dashMatch[2].length +
+          inlineKeyMatch[1].length;
+        pushTypeHintReference(occurrences, line, inlineKeyMatch[2], keyOffset);
+      }
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+    const keyOffset = keyMatch[1].length;
+    pushTypeHintReference(occurrences, line, keyMatch[2], keyOffset);
+  }
+
+  return occurrences;
+}
+
+function pushTypeHintReference(
+  occurrences: TypeOccurrence[],
+  line: number,
+  rawKey: string,
+  keyOffset: number
+): void {
+  const typeHint = parseTypeHint(rawKey);
+  if (!typeHint) {
+    return;
+  }
+
+  const start = keyOffset + typeHint.offset;
+  occurrences.push({
+    name: typeHint.name,
+    range: new vscode.Range(line, start, line, start + typeHint.name.length),
+    kind: "reference"
+  });
+}
+
+function parseTypeDefinitionName(
+  rawKey: string
+): { name: string; offset: number } | undefined {
+  const candidate = rawKey.trim();
+  if (!/^[A-Za-z_][\w.]*$/.test(candidate)) {
+    return undefined;
+  }
+
+  const offset = rawKey.indexOf(candidate);
+  if (offset < 0) {
+    return undefined;
+  }
+
+  return { name: candidate, offset };
+}
+
+function parseTypeHint(rawKey: string): { name: string; offset: number } | undefined {
+  const match = /^(.*?)(\s*<\s*([A-Za-z_][\w.]*)\s*>)\s*$/.exec(rawKey);
+  if (!match) {
+    return undefined;
+  }
+
+  const typeName = match[3];
+  const typeOffsetInHint = match[2].indexOf(typeName);
+  if (typeOffsetInHint < 0) {
+    return undefined;
+  }
+
+  return {
+    name: typeName,
+    offset: match[1].length + typeOffsetInHint
+  };
+}
+
+function findTypeOccurrenceAtPosition(
+  occurrences: TypeOccurrence[],
+  position: vscode.Position
+): TypeOccurrence | undefined {
+  return occurrences.find((occurrence) => occurrence.range.contains(position));
 }
 
 function isSyamlDocument(document: vscode.TextDocument): boolean {
