@@ -17,6 +17,11 @@ use crate::error::SyamlError;
 
 const MAX_SCHEMA_VALIDATION_DEPTH: usize = 64;
 
+struct SchemaValidationContext<'a> {
+    types: &'a BTreeMap<String, JsonValue>,
+    type_stack: Vec<String>,
+}
+
 /// Parses a `schema` section JSON value into [`SchemaDoc`].
 pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
     let map = value
@@ -213,7 +218,25 @@ pub fn validate_json_against_schema(
     schema: &JsonValue,
     path: &str,
 ) -> Result<(), SyamlError> {
-    validate_json_against_schema_inner(value, schema, path, 0)
+    let types = BTreeMap::new();
+    validate_json_against_schema_with_types(value, schema, path, &types)
+}
+
+/// Validates a JSON value against a schema object and named type registry.
+///
+/// Named `type` references are resolved from `types`. Built-in primitive type
+/// names (`string`, `integer`, etc.) are validated directly.
+pub fn validate_json_against_schema_with_types(
+    value: &JsonValue,
+    schema: &JsonValue,
+    path: &str,
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    let mut ctx = SchemaValidationContext {
+        types,
+        type_stack: Vec::new(),
+    };
+    validate_json_against_schema_inner(value, schema, path, 0, &mut ctx)
 }
 
 fn validate_json_against_schema_inner(
@@ -221,6 +244,7 @@ fn validate_json_against_schema_inner(
     schema: &JsonValue,
     path: &str,
     depth: usize,
+    ctx: &mut SchemaValidationContext<'_>,
 ) -> Result<(), SyamlError> {
     if depth > MAX_SCHEMA_VALIDATION_DEPTH {
         return Err(SyamlError::SchemaError(format!(
@@ -238,11 +262,15 @@ fn validate_json_against_schema_inner(
         let type_name = type_value.as_str().ok_or_else(|| {
             SyamlError::SchemaError(format!("schema 'type' at {path} must be a string"))
         })?;
-        if !json_matches_type(value, type_name) {
-            return Err(SyamlError::SchemaError(format!(
-                "type mismatch at {path}: expected {type_name}, found {}",
-                json_type_name(value)
-            )));
+        if is_builtin_type_name(type_name) {
+            if !json_matches_type(value, type_name) {
+                return Err(SyamlError::SchemaError(format!(
+                    "type mismatch at {path}: expected {type_name}, found {}",
+                    json_type_name(value)
+                )));
+            }
+        } else {
+            validate_named_type_reference(value, type_name, path, depth, ctx)?;
         }
     }
 
@@ -259,10 +287,38 @@ fn validate_json_against_schema_inner(
 
     validate_numeric_keywords(value, schema_obj, path)?;
     validate_string_keywords(value, schema_obj, path)?;
-    validate_object_keywords(value, schema_obj, path, depth)?;
-    validate_array_keywords(value, schema_obj, path, depth)?;
+    validate_object_keywords(value, schema_obj, path, depth, ctx)?;
+    validate_array_keywords(value, schema_obj, path, depth, ctx)?;
 
     Ok(())
+}
+
+fn validate_named_type_reference(
+    value: &JsonValue,
+    type_name: &str,
+    path: &str,
+    depth: usize,
+    ctx: &mut SchemaValidationContext<'_>,
+) -> Result<(), SyamlError> {
+    let referenced_schema = ctx.types.get(type_name).ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "unknown type reference at {path}: '{type_name}' not found in schema.types"
+        ))
+    })?;
+
+    if let Some(cycle_start) = ctx.type_stack.iter().position(|t| t == type_name) {
+        let mut cycle = ctx.type_stack[cycle_start..].to_vec();
+        cycle.push(type_name.to_string());
+        return Err(SyamlError::SchemaError(format!(
+            "cyclic type reference at {path}: {}",
+            cycle.join(" -> ")
+        )));
+    }
+
+    ctx.type_stack.push(type_name.to_string());
+    let result = validate_json_against_schema_inner(value, referenced_schema, path, depth + 1, ctx);
+    ctx.type_stack.pop();
+    result
 }
 
 fn validate_numeric_keywords(
@@ -378,6 +434,7 @@ fn validate_object_keywords(
     schema: &serde_json::Map<String, JsonValue>,
     path: &str,
     depth: usize,
+    ctx: &mut SchemaValidationContext<'_>,
 ) -> Result<(), SyamlError> {
     let obj = match value.as_object() {
         Some(v) => v,
@@ -412,6 +469,7 @@ fn validate_object_keywords(
                     child_schema,
                     &child_path,
                     depth + 1,
+                    ctx,
                 )?;
             }
         }
@@ -425,6 +483,7 @@ fn validate_array_keywords(
     schema: &serde_json::Map<String, JsonValue>,
     path: &str,
     depth: usize,
+    ctx: &mut SchemaValidationContext<'_>,
 ) -> Result<(), SyamlError> {
     let arr = match value.as_array() {
         Some(v) => v,
@@ -458,7 +517,7 @@ fn validate_array_keywords(
     if let Some(items_schema) = schema.get("items") {
         for (idx, item) in arr.iter().enumerate() {
             let child_path = format!("{}[{}]", path, idx);
-            validate_json_against_schema_inner(item, items_schema, &child_path, depth + 1)?;
+            validate_json_against_schema_inner(item, items_schema, &child_path, depth + 1, ctx)?;
         }
     }
 
@@ -476,6 +535,13 @@ fn json_matches_type(value: &JsonValue, type_name: &str) -> bool {
         "null" => value.is_null(),
         _ => false,
     }
+}
+
+fn is_builtin_type_name(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "string" | "integer" | "number" | "boolean" | "object" | "array" | "null"
+    )
 }
 
 fn json_type_name(value: &JsonValue) -> &'static str {

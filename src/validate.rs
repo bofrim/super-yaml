@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use serde_json::json;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
@@ -10,7 +11,7 @@ use crate::error::SyamlError;
 use crate::expr::eval::{evaluate, EvalContext, EvalError};
 use crate::expr::parse_expression;
 use crate::resolve::get_json_path;
-use crate::schema::{resolve_type_schema, validate_json_against_schema};
+use crate::schema::{resolve_type_schema, validate_json_against_schema_with_types};
 
 const MAX_CONSTRAINT_PATHS: usize = 2048;
 const MAX_CONSTRAINTS_PER_PATH: usize = 128;
@@ -26,11 +27,12 @@ pub fn validate_type_hints(
     schema: &SchemaDoc,
 ) -> Result<(), SyamlError> {
     for (path, type_name) in hints {
-        let schema_for_type = resolve_type_schema(schema, type_name)?;
+        let _ = resolve_type_schema(schema, type_name)?;
         let value = get_json_path(data, path).ok_or_else(|| {
             SyamlError::TypeHintError(format!("type hint references missing path '{}'", path))
         })?;
-        validate_json_against_schema(value, &schema_for_type, path)?;
+        let hinted_schema = json!({ "type": type_name });
+        validate_json_against_schema_with_types(value, &hinted_schema, path, &schema.types)?;
     }
 
     Ok(())

@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use super_yaml::schema::{parse_schema, resolve_type_schema, validate_json_against_schema};
+use super_yaml::schema::{
+    parse_schema, resolve_type_schema, validate_json_against_schema,
+    validate_json_against_schema_with_types,
+};
 use super_yaml::validate::{
     build_effective_constraints, validate_constraints, validate_type_hints,
 };
@@ -353,6 +356,139 @@ fn type_schema_validates_nested_item_type_mismatch() {
 
     let err = validate_json_against_schema(&value, &schema, "$.arr").unwrap_err();
     assert!(err.to_string().contains("type mismatch"));
+}
+
+#[test]
+fn validate_json_against_schema_with_types_allows_nested_custom_type_reference() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "PositiveNumber": {
+                "type": "number",
+                "exclusiveMinimum": 0
+            },
+            "VisionConfig": {
+                "type": "object",
+                "properties": {
+                    "agent_physical_radius": {
+                        "type": "PositiveNumber"
+                    }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let value = json!({"agent_physical_radius": 10.0});
+    let vision_schema = schema.types.get("VisionConfig").unwrap();
+
+    validate_json_against_schema_with_types(
+        &value,
+        vision_schema,
+        "$.agent.sensors.stereo_vision.eye",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_json_against_schema_with_types_reports_nested_custom_type_violation() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "PositiveNumber": {
+                "type": "number",
+                "exclusiveMinimum": 0
+            },
+            "VisionConfig": {
+                "type": "object",
+                "properties": {
+                    "agent_physical_radius": {
+                        "type": "PositiveNumber"
+                    }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let value = json!({"agent_physical_radius": 0});
+    let vision_schema = schema.types.get("VisionConfig").unwrap();
+
+    let err = validate_json_against_schema_with_types(
+        &value,
+        vision_schema,
+        "$.agent.sensors.stereo_vision.eye",
+        &schema.types,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("exclusiveMinimum violation"));
+}
+
+#[test]
+fn validate_json_against_schema_with_types_composes_local_and_referenced_constraints() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "PositiveNumber": {
+                "type": "number",
+                "exclusiveMinimum": 0
+            }
+        }
+    }))
+    .unwrap();
+
+    let composed = json!({
+        "type": "PositiveNumber",
+        "maximum": 10
+    });
+
+    validate_json_against_schema_with_types(&json!(5), &composed, "$.radius", &schema.types)
+        .unwrap();
+
+    let err =
+        validate_json_against_schema_with_types(&json!(11), &composed, "$.radius", &schema.types)
+            .unwrap_err();
+    assert!(err.to_string().contains("maximum violation"));
+}
+
+#[test]
+fn validate_type_hints_reports_unknown_nested_custom_type_reference() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Container": {
+                "type": "object",
+                "properties": {
+                    "radius": { "type": "MissingType" }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let data = json!({"container": {"radius": 1}});
+    let mut hints = BTreeMap::new();
+    hints.insert("$.container".to_string(), "Container".to_string());
+
+    let err = validate_type_hints(&data, &hints, &schema).unwrap_err();
+    assert!(err.to_string().contains("unknown type reference"));
+    assert!(err.to_string().contains("MissingType"));
+}
+
+#[test]
+fn validate_type_hints_reports_cyclic_type_references() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "A": { "type": "B" },
+            "B": { "type": "A" }
+        }
+    }))
+    .unwrap();
+
+    let data = json!({"x": 1});
+    let mut hints = BTreeMap::new();
+    hints.insert("$.x".to_string(), "A".to_string());
+
+    let err = validate_type_hints(&data, &hints, &schema).unwrap_err();
+    assert!(err.to_string().contains("cyclic type reference"));
+    assert!(err.to_string().contains("A -> B -> A"));
 }
 
 #[test]

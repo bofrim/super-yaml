@@ -142,6 +142,23 @@ types:
 
 A data key can reference this type using `<TypeName>`.
 
+Schema nodes can also reference named types via `type`:
+
+```yaml
+types:
+  PositiveNumber:
+    type: number
+    exclusiveMinimum: 0
+  EyeConfig:
+    type: object
+    properties:
+      agent_physical_radius:
+        type: PositiveNumber
+```
+
+When a schema node combines `type: <NamedType>` with additional keywords,
+both must pass (logical conjunction / `allOf`-like behavior).
+
 ### `constraints`
 
 `constraints` maps paths to one expression or a list of expressions:
@@ -199,6 +216,8 @@ The validator supports this subset:
 Built-in primitive type names are also accepted directly:
 
 - `string`, `integer`, `number`, `boolean`, `object`, `array`, `null`
+
+Named type references from `schema.types` are accepted anywhere `type` appears.
 
 ## `data` Section and Type Hints
 
