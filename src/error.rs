@@ -32,6 +32,9 @@ pub enum SyamlError {
     /// Dependency cycle detected during expression resolution.
     #[error("cycle error: {0}")]
     CycleError(String),
+    /// Import parsing, resolution, or loading failure.
+    #[error("import error: {0}")]
+    ImportError(String),
     /// Output serialization failure.
     #[error("serialization error: {0}")]
     SerializationError(String),

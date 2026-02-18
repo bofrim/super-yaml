@@ -107,17 +107,26 @@ fn split_key_and_hint(raw: &str) -> Result<(String, Option<String>), SyamlError>
         )));
     }
 
-    if !hint
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_alphabetic() || c == '_')
-        .unwrap_or(false)
-        || !hint.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !is_valid_type_name(hint) {
         return Ok((trimmed.to_string(), None));
     }
 
     Ok((base.to_string(), Some(hint.to_string())))
+}
+
+fn is_valid_type_name(hint: &str) -> bool {
+    hint.split('.').all(is_valid_type_segment)
+}
+
+fn is_valid_type_segment(segment: &str) -> bool {
+    let mut chars = segment.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]
@@ -132,5 +141,12 @@ mod tests {
         let (_data, hints) = normalize_data_with_hints(&json).unwrap();
         assert_eq!(hints.get("$.name").unwrap(), "string");
         assert_eq!(hints.get("$.count").unwrap(), "integer");
+    }
+
+    #[test]
+    fn extracts_namespaced_type_hints() {
+        let json = json!({"endpoint <shared.Port>": 8080});
+        let (_data, hints) = normalize_data_with_hints(&json).unwrap();
+        assert_eq!(hints.get("$.endpoint").unwrap(), "shared.Port");
     }
 }

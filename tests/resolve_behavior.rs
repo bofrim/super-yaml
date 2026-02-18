@@ -51,7 +51,10 @@ fn resolve_env_bindings_uses_env_defaults_and_null_for_optional() {
         },
     );
 
-    let front_matter = FrontMatter { env: env_defs };
+    let front_matter = FrontMatter {
+        env: env_defs,
+        imports: BTreeMap::new(),
+    };
     let resolved = resolve_env_bindings(
         Some(&front_matter),
         &env_provider(&[("NUM_KEY", "42"), ("FLAG_KEY", "true")]),
@@ -76,7 +79,10 @@ fn resolve_env_bindings_errors_for_missing_required_without_default() {
         },
     );
 
-    let front_matter = FrontMatter { env: env_defs };
+    let front_matter = FrontMatter {
+        env: env_defs,
+        imports: BTreeMap::new(),
+    };
     let err = resolve_env_bindings(Some(&front_matter), &env_provider(&[])).unwrap_err();
     assert!(err
         .to_string()
@@ -101,7 +107,10 @@ fn resolve_env_bindings_redacts_raw_values_in_parse_errors() {
         },
     );
 
-    let front_matter = FrontMatter { env: env_defs };
+    let front_matter = FrontMatter {
+        env: env_defs,
+        imports: BTreeMap::new(),
+    };
     let err = resolve_env_bindings(
         Some(&front_matter),
         &env_provider(&[("BAD_ENV", "\"unterminated")]),

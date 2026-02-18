@@ -26,6 +26,7 @@ fn all_examples_compile_to_expected_json() {
         "pricing_engine",
         "inventory_policy",
         "alert_rules",
+        "type_composition",
     ];
 
     for case in cases {
@@ -50,6 +51,7 @@ fn all_examples_validate_successfully() {
         "pricing_engine",
         "inventory_policy",
         "alert_rules",
+        "type_composition",
     ];
 
     for case in cases {

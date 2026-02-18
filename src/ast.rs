@@ -52,6 +52,9 @@ impl CompiledDocument {
 pub struct FrontMatter {
     /// Symbol-to-environment binding map.
     pub env: BTreeMap<String, EnvBinding>,
+    /// Named imports for pulling in external `.syaml` documents.
+    #[serde(default)]
+    pub imports: BTreeMap<String, ImportBinding>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +66,13 @@ pub struct EnvBinding {
     pub required: bool,
     /// Default value used when env input is missing.
     pub default: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Single import entry from `front_matter.imports`.
+pub struct ImportBinding {
+    /// Filesystem path to another `.syaml` document.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

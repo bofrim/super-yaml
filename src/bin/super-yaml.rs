@@ -1,14 +1,15 @@
-use std::{collections::HashSet, env, fs, path::PathBuf, process::ExitCode};
+use std::{collections::HashSet, env, path::PathBuf, process::ExitCode};
 
 use super_yaml::{
-    compile_document_to_json, compile_document_to_yaml, validate_document, EnvProvider,
-    ProcessEnvProvider,
+    compile_document_from_path, generate_rust_types_from_path, validate_document_from_path,
+    EnvProvider, ProcessEnvProvider,
 };
 
 #[derive(Clone, Copy, Debug)]
 enum OutputFormat {
     Json,
     Yaml,
+    Rust,
 }
 
 #[derive(Debug)]
@@ -78,9 +79,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 }
 
 fn run_validate(file: &PathBuf, env: &dyn EnvProvider) -> Result<(), String> {
-    let input =
-        fs::read_to_string(file).map_err(|e| format!("failed to read {}: {e}", file.display()))?;
-    validate_document(&input, env).map_err(|e| e.to_string())?;
+    validate_document_from_path(file, env).map_err(|e| e.to_string())?;
     println!("OK");
     Ok(())
 }
@@ -91,11 +90,14 @@ fn run_compile(
     pretty: bool,
     format: OutputFormat,
 ) -> Result<(), String> {
-    let input =
-        fs::read_to_string(file).map_err(|e| format!("failed to read {}: {e}", file.display()))?;
     let output = match format {
-        OutputFormat::Json => compile_document_to_json(&input, env, pretty),
-        OutputFormat::Yaml => compile_document_to_yaml(&input, env),
+        OutputFormat::Json => compile_document_from_path(file, env)
+            .map_err(|e| e.to_string())?
+            .to_json_string(pretty),
+        OutputFormat::Yaml => Ok(compile_document_from_path(file, env)
+            .map_err(|e| e.to_string())?
+            .to_yaml_string()),
+        OutputFormat::Rust => generate_rust_types_from_path(file),
     }
     .map_err(|e| e.to_string())?;
 
@@ -131,20 +133,27 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 format = OutputFormat::Yaml;
                 i += 1;
             }
+            "--rust" => {
+                format = OutputFormat::Rust;
+                i += 1;
+            }
             "--json" => {
                 format = OutputFormat::Json;
                 i += 1;
             }
             "--format" => {
                 if i + 1 >= args.len() {
-                    return Err("missing value for --format (expected json or yaml)".to_string());
+                    return Err(
+                        "missing value for --format (expected json, yaml, or rust)".to_string(),
+                    );
                 }
                 format = match args[i + 1].as_str() {
                     "json" => OutputFormat::Json,
                     "yaml" => OutputFormat::Yaml,
+                    "rust" => OutputFormat::Rust,
                     other => {
                         return Err(format!(
-                            "invalid --format value '{other}' (expected json or yaml)"
+                            "invalid --format value '{other}' (expected json, yaml, or rust)"
                         ))
                     }
                 };
@@ -188,8 +197,10 @@ fn parse_allow_env_option(
 fn print_usage() {
     eprintln!("usage:");
     eprintln!("  super-yaml validate <file> [--allow-env KEY]...");
-    eprintln!("  super-yaml compile <file> [--pretty] [--format json|yaml] [--allow-env KEY]...");
-    eprintln!("  super-yaml compile <file> [--yaml|--json] [--allow-env KEY]...");
+    eprintln!(
+        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust] [--allow-env KEY]..."
+    );
+    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust] [--allow-env KEY]...");
     eprintln!(
         "note: environment access is disabled by default; use --allow-env to permit specific keys."
     );
@@ -214,6 +225,24 @@ mod tests {
         let options = parse_compile_options(&args).unwrap();
         assert!(options.pretty);
         assert!(matches!(options.format, OutputFormat::Yaml));
+        assert!(options.allowed_env_keys.is_empty());
+    }
+
+    #[test]
+    fn parse_compile_rust_format() {
+        let args = vec!["--format".to_string(), "rust".to_string()];
+        let options = parse_compile_options(&args).unwrap();
+        assert!(!options.pretty);
+        assert!(matches!(options.format, OutputFormat::Rust));
+        assert!(options.allowed_env_keys.is_empty());
+    }
+
+    #[test]
+    fn parse_compile_rust_shortcut() {
+        let args = vec!["--rust".to_string()];
+        let options = parse_compile_options(&args).unwrap();
+        assert!(!options.pretty);
+        assert!(matches!(options.format, OutputFormat::Rust));
         assert!(options.allowed_env_keys.is_empty());
     }
 

@@ -492,6 +492,56 @@ fn validate_type_hints_reports_cyclic_type_references() {
 }
 
 #[test]
+fn validate_type_hints_reports_nested_hint_type_mismatch_against_parent_schema() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "Service": {
+                "type": "object",
+                "properties": {
+                    "port": { "type": "Port" }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let data = json!({"service": {"port": 8080}});
+    let mut hints = BTreeMap::new();
+    hints.insert("$.service".to_string(), "Service".to_string());
+    hints.insert("$.service.port".to_string(), "integer".to_string());
+
+    let err = validate_type_hints(&data, &hints, &schema).unwrap_err();
+    assert!(err.to_string().contains("type hint mismatch"));
+    assert!(err.to_string().contains("$.service.port"));
+    assert!(err.to_string().contains("Port"));
+}
+
+#[test]
+fn validate_type_hints_reports_nested_hint_field_missing_from_parent_schema() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Service": {
+                "type": "object",
+                "properties": {
+                    "port": { "type": "integer" }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let data = json!({"service": {"port": 8080, "mode": "prod"}});
+    let mut hints = BTreeMap::new();
+    hints.insert("$.service".to_string(), "Service".to_string());
+    hints.insert("$.service.mode".to_string(), "string".to_string());
+
+    let err = validate_type_hints(&data, &hints, &schema).unwrap_err();
+    assert!(err.to_string().contains("not declared in schema"));
+    assert!(err.to_string().contains("$.service.mode"));
+}
+
+#[test]
 fn validate_constraints_allows_prefixed_equals_sign() {
     let data = json!({"replicas": 2});
     let env = BTreeMap::new();

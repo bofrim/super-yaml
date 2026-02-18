@@ -1,6 +1,6 @@
 # super_yaml
 
-`super_yaml` is a Rust crate and CLI for compiling a strict, sectioned YAML dialect (`.syaml`) into resolved JSON or YAML.
+`super_yaml` is a Rust crate and CLI for compiling a strict, sectioned YAML dialect (`.syaml`) into resolved JSON or YAML, and for generating first-pass Rust types from `schema.types`.
 
 It combines:
 
@@ -43,6 +43,12 @@ cargo run --bin super-yaml -- compile examples/basic.syaml --pretty
 
 ```bash
 cargo run --bin super-yaml -- compile examples/basic.syaml --format yaml
+```
+
+### 4. Generate Rust types
+
+```bash
+cargo run --bin super-yaml -- compile examples/type_composition.syaml --format rust
 ```
 
 ## Document Format (v0)
@@ -125,6 +131,29 @@ Resolution behavior:
 3. If absent and `default` exists, use `default`.
 4. If absent and required, fail.
 5. If absent and not required, produce `null`.
+
+## `front_matter.imports` Semantics
+
+`front_matter.imports` loads external `.syaml` documents under a namespace alias.
+
+```yaml
+imports:
+  shared: ./shared.syaml
+```
+
+Rules:
+
+- `imports` must be a mapping.
+- each key is a namespace alias.
+- each value is either a path string or an object with a string `path`.
+- relative paths resolve from the importing file's directory (CLI and `*_from_path` APIs).
+
+Behavior:
+
+- imported data is mounted under `data.<alias>`.
+- imported schema types are mounted under `<alias.TypeName>`.
+- imported files run their own env/expression/type/constraint pipeline.
+- cyclic imports are rejected.
 
 ## `schema` Section
 
@@ -226,6 +255,7 @@ A data key may carry a type hint suffix:
 ```yaml
 port <Port>: 5432
 replicas <integer>: 3
+port_from_shared <shared.Port>: 8080
 ```
 
 Normalization behavior:
@@ -311,8 +341,8 @@ This is not a full YAML 1.2 parser.
 
 ```text
 super-yaml validate <file> [--allow-env KEY]...
-super-yaml compile <file> [--pretty] [--format json|yaml] [--allow-env KEY]...
-super-yaml compile <file> [--yaml|--json] [--allow-env KEY]...
+super-yaml compile <file> [--pretty] [--format json|yaml|rust] [--allow-env KEY]...
+super-yaml compile <file> [--yaml|--json|--rust] [--allow-env KEY]...
 ```
 
 ### `validate`
@@ -332,16 +362,16 @@ super-yaml compile <file> [--yaml|--json] [--allow-env KEY]...
 Options:
 
 - `--pretty`: pretty JSON output
-- `--format json|yaml`: explicit output format
-- `--yaml`, `--json`: format shortcuts
+- `--format json|yaml|rust`: explicit output format
+- `--yaml`, `--json`, `--rust`: format shortcuts
 - `--allow-env KEY`: allow access to one process environment variable key (repeatable)
 
 ## Rust API
 
 ```rust,no_run
 use super_yaml::{
-    compile_document, compile_document_to_json, compile_document_to_yaml, validate_document,
-    ProcessEnvProvider,
+    compile_document, compile_document_to_json, compile_document_to_yaml, generate_rust_types,
+    validate_document, ProcessEnvProvider,
 };
 
 fn run(input: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -350,11 +380,13 @@ fn run(input: &str) -> Result<(), Box<dyn std::error::Error>> {
     let compiled = compile_document(input, &env)?;
     let json = compile_document_to_json(input, &env, true)?;
     let yaml = compile_document_to_yaml(input, &env)?;
+    let rust = generate_rust_types(input)?;
     validate_document(input, &env)?;
 
     println!("{}", compiled.to_json_string(false)?);
     println!("{}", json);
     println!("{}", yaml);
+    println!("{}", rust);
     Ok(())
 }
 ```
@@ -409,6 +441,7 @@ The repository ships with sample `.syaml` inputs and expected JSON outputs:
 - `examples/pricing_engine.syaml`
 - `examples/inventory_policy.syaml`
 - `examples/alert_rules.syaml`
+- `examples/type_composition.syaml`
 
 Each has a matching `examples/*.expected.json`.
 
@@ -433,6 +466,7 @@ cargo clippy --all-targets --all-features
 - only `from: env` bindings are supported
 - expression variable paths are dot-based object traversal
 - parser is a YAML subset, not full YAML
+- Rust codegen is first-pass and currently targets named `schema.types` only (anonymous inline object schemas become `serde_json::Value`)
 - compilation enforces depth/size guardrails for expressions, constraints, and YAML structures
 
 ## License

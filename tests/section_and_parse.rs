@@ -122,6 +122,41 @@ name: test
 }
 
 #[test]
+fn parse_document_parses_front_matter_imports() {
+    let input = r#"
+---!syaml/v0
+---front_matter
+imports:
+  shared: ./shared.syaml
+---schema
+types: {}
+---data
+name: test
+"#;
+
+    let parsed = parse_document(input).unwrap();
+    let front_matter = parsed.front_matter.expect("front_matter");
+    assert_eq!(front_matter.imports["shared"].path, "./shared.syaml");
+}
+
+#[test]
+fn parse_document_rejects_invalid_import_alias() {
+    let input = r#"
+---!syaml/v0
+---front_matter
+imports:
+  bad-alias: ./shared.syaml
+---schema
+types: {}
+---data
+name: test
+"#;
+
+    let err = parse_document(input).unwrap_err();
+    assert!(err.to_string().contains("invalid namespace alias"));
+}
+
+#[test]
 fn parse_document_rejects_unsupported_env_binding_source() {
     let input = r#"
 ---!syaml/v0

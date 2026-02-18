@@ -39,6 +39,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const semanticProvider = new SyamlSemanticTokensProvider();
   const typeDefinitionProvider = new SyamlTypeDefinitionProvider();
   const typeReferenceProvider = new SyamlTypeReferenceProvider();
+  const inlayHintsProvider = new SyamlInlayHintsProvider();
 
   context.subscriptions.push(diagnostics);
   context.subscriptions.push(
@@ -58,6 +59,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerReferenceProvider(
       { language: "syaml" },
       typeReferenceProvider
+    )
+  );
+  context.subscriptions.push(
+    vscode.languages.registerInlayHintsProvider(
+      { language: "syaml" },
+      inlayHintsProvider
     )
   );
 
@@ -307,7 +314,7 @@ class SyamlTypeDefinitionProvider implements vscode.DefinitionProvider {
     const occurrences = collectTypeOccurrences(document);
     const target = findTypeOccurrenceAtPosition(occurrences, position);
     if (!target) {
-      return undefined;
+      return findTypedDataKeySchemaDefinition(document, position);
     }
 
     const definitions = occurrences.filter(
@@ -353,6 +360,75 @@ class SyamlTypeReferenceProvider implements vscode.ReferenceProvider {
     return references.map(
       (reference) => new vscode.Location(document.uri, reference.range)
     );
+  }
+}
+
+class SyamlInlayHintsProvider implements vscode.InlayHintsProvider {
+  provideInlayHints(
+    document: vscode.TextDocument,
+    range: vscode.Range
+  ): vscode.ProviderResult<vscode.InlayHint[]> {
+    if (!isSyamlDocument(document)) {
+      return [];
+    }
+
+    const schemaIndex = buildSchemaTypeIndex(document);
+    if (schemaIndex.roots.size === 0) {
+      return [];
+    }
+
+    const locations = collectDataKeyLocations(document);
+    if (locations.length === 0) {
+      return [];
+    }
+
+    const explicitHints = new Map<string, string>();
+    for (const location of locations) {
+      if (!location.explicitTypeHint) {
+        continue;
+      }
+      explicitHints.set(location.path, location.explicitTypeHint);
+    }
+
+    const hints: vscode.InlayHint[] = [];
+    for (const location of locations) {
+      if (location.explicitTypeHint) {
+        continue;
+      }
+      if (location.line < range.start.line || location.line > range.end.line) {
+        continue;
+      }
+
+      const ancestor = nearestAncestorHint(location.path, explicitHints);
+      if (!ancestor) {
+        continue;
+      }
+
+      const relativeSegments = relativeJsonPathSegments(ancestor.path, location.path);
+      if (!relativeSegments || relativeSegments.length === 0) {
+        continue;
+      }
+
+      const inferredType = inferSchemaTypeFromAncestor(
+        schemaIndex,
+        ancestor.typeName,
+        relativeSegments
+      );
+      if (!inferredType) {
+        continue;
+      }
+
+      const hint = new vscode.InlayHint(
+        new vscode.Position(location.line, location.end),
+        inferredType,
+        vscode.InlayHintKind.Type
+      );
+      hint.paddingLeft = true;
+      hint.tooltip = `Inferred from ${ancestor.typeName}`;
+      hints.push(hint);
+    }
+
+    return hints;
   }
 }
 
@@ -534,6 +610,357 @@ function collectTypeHintReferences(document: vscode.TextDocument): TypeOccurrenc
   return occurrences;
 }
 
+function buildSchemaTypeIndex(document: vscode.TextDocument): SchemaTypeIndex {
+  const bounds = findSectionBounds(document, "schema");
+  const roots = new Map<string, SchemaNodeLite>();
+  if (!bounds) {
+    return { roots };
+  }
+
+  const stack: Array<{ indent: number; key: string }> = [];
+  for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):(.*)$/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    const rawKey = keyMatch[2];
+    const keyName = rawKey.trim();
+    if (keyName.length === 0) {
+      continue;
+    }
+    const valueText = keyMatch[4].trim();
+    const keyStart = indent + rawKey.indexOf(keyName);
+
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+    stack.push({ indent, key: keyName });
+
+    const fullPath = stack.map((entry) => entry.key);
+    if (fullPath[0] !== "types" || fullPath.length < 2) {
+      continue;
+    }
+
+    const typeName = fullPath[1];
+    const relPath = fullPath.slice(2);
+    const typeRoot = ensureTypeRoot(roots, typeName);
+
+    if (relPath.length >= 2 && relPath[relPath.length - 2] === "properties") {
+      const propertyNode = ensureSchemaNodeByRelPath(typeRoot, relPath);
+      propertyNode.definitionRange = new vscode.Range(
+        line,
+        keyStart,
+        line,
+        keyStart + keyName.length
+      );
+      const inlinePropertyType = extractTypeNameFromValue(valueText);
+      if (inlinePropertyType) {
+        propertyNode.typeName = inlinePropertyType;
+      }
+    }
+
+    if (keyName === "type") {
+      const parentNode = ensureSchemaNodeByRelPath(typeRoot, relPath.slice(0, -1));
+      const declaredType = extractTypeNameFromValue(valueText);
+      if (declaredType) {
+        parentNode.typeName = declaredType;
+      }
+      continue;
+    }
+
+    if (keyName === "properties") {
+      const parentNode = ensureSchemaNodeByRelPath(typeRoot, relPath.slice(0, -1));
+      parentNode.hasPropertiesKeyword = true;
+      continue;
+    }
+
+    if (keyName === "items") {
+      const parentNode = ensureSchemaNodeByRelPath(typeRoot, relPath.slice(0, -1));
+      parentNode.hasItemsKeyword = true;
+      const itemsNode = ensureSchemaNodeByRelPath(typeRoot, relPath);
+      const inlineItemType = extractTypeNameFromValue(valueText);
+      if (inlineItemType) {
+        itemsNode.typeName = inlineItemType;
+      }
+    }
+  }
+
+  return { roots };
+}
+
+function ensureTypeRoot(
+  roots: Map<string, SchemaNodeLite>,
+  typeName: string
+): SchemaNodeLite {
+  const existing = roots.get(typeName);
+  if (existing) {
+    return existing;
+  }
+  const created = createSchemaNode();
+  roots.set(typeName, created);
+  return created;
+}
+
+function createSchemaNode(): SchemaNodeLite {
+  return {
+    properties: new Map<string, SchemaNodeLite>(),
+    hasPropertiesKeyword: false,
+    hasItemsKeyword: false
+  };
+}
+
+function ensureSchemaNodeByRelPath(
+  root: SchemaNodeLite,
+  relPath: string[]
+): SchemaNodeLite {
+  let current = root;
+  for (let i = 0; i < relPath.length; i += 1) {
+    const segment = relPath[i];
+    if (segment === "properties") {
+      const propName = relPath[i + 1];
+      if (!propName) {
+        break;
+      }
+      let child = current.properties.get(propName);
+      if (!child) {
+        child = createSchemaNode();
+        current.properties.set(propName, child);
+      }
+      current = child;
+      i += 1;
+      continue;
+    }
+
+    if (segment === "items") {
+      if (!current.items) {
+        current.items = createSchemaNode();
+      }
+      current = current.items;
+    }
+  }
+  return current;
+}
+
+function extractTypeNameFromValue(valueText: string): string | undefined {
+  if (valueText.length === 0) {
+    return undefined;
+  }
+
+  const quoted = /^(["'])([A-Za-z_][\w.]*)\1$/.exec(valueText);
+  if (quoted) {
+    return quoted[2];
+  }
+  if (/^[A-Za-z_][\w.]*$/.test(valueText)) {
+    return valueText;
+  }
+
+  const inlineType =
+    /(?:^|[{,]\s*)type\s*:\s*(?:"([A-Za-z_][\w.]*)"|'([A-Za-z_][\w.]*)'|([A-Za-z_][\w.]*))(?:\s*[,}].*|\s*$)/.exec(
+      valueText
+    );
+  if (!inlineType) {
+    return undefined;
+  }
+  return inlineType[1] ?? inlineType[2] ?? inlineType[3];
+}
+
+function inferSchemaTypeFromAncestor(
+  index: SchemaTypeIndex,
+  ancestorType: string,
+  segments: JsonPathSegment[]
+): string | undefined {
+  const root = createSchemaNode();
+  root.typeName = ancestorType;
+
+  let current = root;
+  for (const segment of segments) {
+    const next = descendSchemaForInference(index, current, segment, new Set<string>());
+    if (!next) {
+      return undefined;
+    }
+    current = next;
+  }
+
+  if (!current.typeName || !/^[A-Za-z_][\w.]*$/.test(current.typeName)) {
+    return undefined;
+  }
+  return current.typeName;
+}
+
+function descendSchemaForInference(
+  index: SchemaTypeIndex,
+  current: SchemaNodeLite,
+  segment: JsonPathSegment,
+  visitedTypes: Set<string>
+): SchemaNodeLite | undefined {
+  if (segment.kind === "key") {
+    const direct = current.properties.get(String(segment.value));
+    if (direct) {
+      return direct;
+    }
+    if (current.hasPropertiesKeyword) {
+      return undefined;
+    }
+  } else {
+    if (current.items) {
+      return current.items;
+    }
+    if (current.hasItemsKeyword) {
+      return undefined;
+    }
+  }
+
+  const declaredType = current.typeName;
+  if (!declaredType) {
+    return undefined;
+  }
+  if (isBuiltinTypeName(declaredType)) {
+    if (segment.kind === "key" && declaredType !== "object") {
+      return undefined;
+    }
+    if (segment.kind === "index" && declaredType !== "array") {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  if (visitedTypes.has(declaredType)) {
+    return undefined;
+  }
+  const referenced = index.roots.get(declaredType);
+  if (!referenced) {
+    return undefined;
+  }
+
+  const nestedVisited = new Set(visitedTypes);
+  nestedVisited.add(declaredType);
+  return descendSchemaForInference(index, referenced, segment, nestedVisited);
+}
+
+function nearestAncestorHint(
+  path: string,
+  hintsByPath: Map<string, string>
+): { path: string; typeName: string } | undefined {
+  let current = parentJsonPath(path);
+  while (current) {
+    const typeName = hintsByPath.get(current);
+    if (typeName) {
+      return { path: current, typeName };
+    }
+    current = parentJsonPath(current);
+  }
+  return undefined;
+}
+
+function relativeJsonPathSegments(
+  ancestorPath: string,
+  path: string
+): JsonPathSegment[] | undefined {
+  const ancestorSegments = parseJsonPathSegments(ancestorPath);
+  const pathSegments = parseJsonPathSegments(path);
+  if (!ancestorSegments || !pathSegments) {
+    return undefined;
+  }
+  if (ancestorSegments.length > pathSegments.length) {
+    return undefined;
+  }
+
+  for (let i = 0; i < ancestorSegments.length; i += 1) {
+    if (
+      ancestorSegments[i].kind !== pathSegments[i].kind ||
+      ancestorSegments[i].value !== pathSegments[i].value
+    ) {
+      return undefined;
+    }
+  }
+  return pathSegments.slice(ancestorSegments.length);
+}
+
+function parseJsonPathSegments(path: string): JsonPathSegment[] | undefined {
+  if (path === "$") {
+    return [];
+  }
+  if (!path.startsWith("$.")) {
+    return undefined;
+  }
+
+  const segments: JsonPathSegment[] = [];
+  const chars = path.slice(2);
+  let current = "";
+  let i = 0;
+
+  while (i < chars.length) {
+    const ch = chars[i];
+    if (ch === ".") {
+      if (current.length > 0) {
+        segments.push({ kind: "key", value: current });
+        current = "";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === "[") {
+      if (current.length > 0) {
+        segments.push({ kind: "key", value: current });
+        current = "";
+      }
+      i += 1;
+      let digits = "";
+      while (i < chars.length && chars[i] !== "]") {
+        digits += chars[i];
+        i += 1;
+      }
+      if (i >= chars.length || chars[i] !== "]") {
+        return undefined;
+      }
+      i += 1;
+      if (!/^\d+$/.test(digits)) {
+        return undefined;
+      }
+      segments.push({ kind: "index", value: Number.parseInt(digits, 10) });
+      continue;
+    }
+
+    current += ch;
+    i += 1;
+  }
+
+  if (current.length > 0) {
+    segments.push({ kind: "key", value: current });
+  }
+  return segments;
+}
+
+function parentJsonPath(path: string): string | undefined {
+  if (path === "$") {
+    return undefined;
+  }
+
+  let lastSeparator = -1;
+  for (let i = 0; i < path.length; i += 1) {
+    const ch = path[i];
+    if ((ch === "." && i > 1) || ch === "[") {
+      lastSeparator = i;
+    }
+  }
+
+  if (lastSeparator === 1) {
+    return "$";
+  }
+  if (lastSeparator <= 0) {
+    return undefined;
+  }
+  return path.slice(0, lastSeparator);
+}
+
 function pushTypeHintReference(
   occurrences: TypeOccurrence[],
   line: number,
@@ -592,6 +1019,108 @@ function findTypeOccurrenceAtPosition(
   position: vscode.Position
 ): TypeOccurrence | undefined {
   return occurrences.find((occurrence) => occurrence.range.contains(position));
+}
+
+function findTypedDataKeySchemaDefinition(
+  document: vscode.TextDocument,
+  position: vscode.Position
+): vscode.Location | undefined {
+  const locations = collectDataKeyLocations(document);
+  const clicked = locations.find((location) =>
+    new vscode.Range(location.line, location.start, location.line, location.end).contains(
+      position
+    )
+  );
+  if (!clicked) {
+    return undefined;
+  }
+
+  const explicitHints = new Map<string, string>();
+  for (const location of locations) {
+    if (!location.explicitTypeHint) {
+      continue;
+    }
+    explicitHints.set(location.path, location.explicitTypeHint);
+  }
+  if (explicitHints.size === 0) {
+    return undefined;
+  }
+
+  const schemaIndex = buildSchemaTypeIndex(document);
+  if (schemaIndex.roots.size === 0) {
+    return undefined;
+  }
+
+  const typedAncestors = collectTypedAncestors(clicked.path, explicitHints);
+  for (const ancestor of typedAncestors) {
+    const relativeSegments = relativeJsonPathSegments(ancestor.path, clicked.path);
+    if (!relativeSegments) {
+      continue;
+    }
+
+    if (relativeSegments.length === 0) {
+      const typeDefinition = findTypeDefinitionRangeByName(document, ancestor.typeName);
+      if (typeDefinition) {
+        return new vscode.Location(document.uri, typeDefinition);
+      }
+      continue;
+    }
+
+    const propertyDefinition = findPropertyDefinitionRangeFromAncestor(
+      schemaIndex,
+      ancestor.typeName,
+      relativeSegments
+    );
+    if (propertyDefinition) {
+      return new vscode.Location(document.uri, propertyDefinition);
+    }
+  }
+
+  return undefined;
+}
+
+function collectTypedAncestors(
+  path: string,
+  hintsByPath: Map<string, string>
+): Array<{ path: string; typeName: string }> {
+  const ancestors: Array<{ path: string; typeName: string }> = [];
+  let current: string | undefined = path;
+  while (current) {
+    const typeName = hintsByPath.get(current);
+    if (typeName) {
+      ancestors.push({ path: current, typeName });
+    }
+    current = parentJsonPath(current);
+  }
+  return ancestors;
+}
+
+function findTypeDefinitionRangeByName(
+  document: vscode.TextDocument,
+  typeName: string
+): vscode.Range | undefined {
+  const definitions = collectTypeDefinitions(document);
+  return definitions.find((definition) => definition.name === typeName)?.range;
+}
+
+function findPropertyDefinitionRangeFromAncestor(
+  schemaIndex: SchemaTypeIndex,
+  ancestorType: string,
+  segments: JsonPathSegment[]
+): vscode.Range | undefined {
+  const root = createSchemaNode();
+  root.typeName = ancestorType;
+
+  let current = root;
+  for (const segment of segments) {
+    const next = descendSchemaForInference(schemaIndex, current, segment, new Set<string>());
+    if (!next) {
+      return undefined;
+    }
+    current = next;
+  }
+
+  return current.definitionRange;
 }
 
 function isSyamlDocument(document: vscode.TextDocument): boolean {
@@ -793,11 +1322,30 @@ interface DataKeyLocation {
   line: number;
   start: number;
   end: number;
+  explicitTypeHint?: string;
 }
 
 interface ParseStackEntry {
   indent: number;
   path: string;
+}
+
+interface JsonPathSegment {
+  kind: "key" | "index";
+  value: string | number;
+}
+
+interface SchemaNodeLite {
+  typeName?: string;
+  definitionRange?: vscode.Range;
+  properties: Map<string, SchemaNodeLite>;
+  hasPropertiesKeyword: boolean;
+  items?: SchemaNodeLite;
+  hasItemsKeyword: boolean;
+}
+
+interface SchemaTypeIndex {
+  roots: Map<string, SchemaNodeLite>;
 }
 
 function inferPathRange(
@@ -922,12 +1470,14 @@ function collectDataKeyLocations(document: vscode.TextDocument): DataKeyLocation
         inlineKeyMatch[1].length +
         keyInfo.keyOffset;
       const childPath = `${itemPath}.${keyInfo.key}`;
+      const explicitTypeHint = parseTypeHint(inlineKeyMatch[2])?.name;
       locations.push({
         path: childPath,
         normalizedPath: normalizeJsonPath(childPath),
         line,
         start: keyStart,
-        end: keyStart + keyInfo.key.length
+        end: keyStart + keyInfo.key.length,
+        explicitTypeHint
       });
       stack.push({
         indent: dashIndent + 1 + dashMatch[2].length + inlineKeyMatch[1].length,
@@ -954,12 +1504,14 @@ function collectDataKeyLocations(document: vscode.TextDocument): DataKeyLocation
     const parentPath = stack.length > 0 ? stack[stack.length - 1].path : "$";
     const path = `${parentPath}.${keyInfo.key}`;
     const start = indent + keyInfo.keyOffset;
+    const explicitTypeHint = parseTypeHint(keyMatch[2])?.name;
     locations.push({
       path,
       normalizedPath: normalizeJsonPath(path),
       line,
       start,
-      end: start + keyInfo.key.length
+      end: start + keyInfo.key.length,
+      explicitTypeHint
     });
     stack.push({ indent, path });
   }
@@ -1017,6 +1569,18 @@ function lineWithoutComment(text: string): string {
     return text.slice(0, commentStart);
   }
   return text;
+}
+
+function isBuiltinTypeName(typeName: string): boolean {
+  return (
+    typeName === "string" ||
+    typeName === "integer" ||
+    typeName === "number" ||
+    typeName === "boolean" ||
+    typeName === "object" ||
+    typeName === "array" ||
+    typeName === "null"
+  );
 }
 
 function escapeRegex(text: string): string {

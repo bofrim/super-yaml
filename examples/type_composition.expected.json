@@ -1,0 +1,12 @@
+{
+  "agent": {
+    "sensors": {
+      "stereo_vision": {
+        "eye": {
+          "agent_physical_radius": 10.0,
+          "baseline": 0.4
+        }
+      }
+    }
+  }
+}
