@@ -84,6 +84,118 @@
     {
       "captures": {
         "1": {
+          "name": "entity.name.type.class.syaml"
+        }
+      },
+      "match": "^\\s*([A-Z][\\w.]*)\\s*:(?=\\s|$)"
+    },
+    {
+      "captures": {
+        "1": {
+          "name": "variable.other.property.syaml"
+        },
+        "2": {
+          "name": "support.type.builtin.syaml"
+        },
+        "3": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "4": {
+          "name": "support.type.builtin.syaml"
+        },
+        "5": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "6": {
+          "name": "support.type.builtin.syaml"
+        },
+        "7": {
+          "name": "keyword.operator.optional.syaml"
+        }
+      },
+      "match": "((?:^\\s*|[{},]\\s*)type\\s*:\\s*)(?:\"(string|integer|number|boolean|object|array|null)(\\?)?\"|'(string|integer|number|boolean|object|array|null)(\\?)?'|(string|integer|number|boolean|object|array|null)(\\?)?)"
+    },
+    {
+      "captures": {
+        "1": {
+          "name": "variable.other.property.syaml"
+        },
+        "2": {
+          "name": "entity.name.type.syaml"
+        },
+        "3": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "4": {
+          "name": "entity.name.type.syaml"
+        },
+        "5": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "6": {
+          "name": "entity.name.type.syaml"
+        },
+        "7": {
+          "name": "keyword.operator.optional.syaml"
+        }
+      },
+      "match": "((?:^\\s*|[{},]\\s*)type\\s*:\\s*)(?:\"([A-Za-z_][\\w.]*)(\\?)?\"|'([A-Za-z_][\\w.]*)(\\?)?'|([A-Za-z_][\\w.]*)(\\?)?)"
+    },
+    {
+      "captures": {
+        "1": {
+          "name": "variable.other.property.syaml"
+        },
+        "2": {
+          "name": "support.type.builtin.syaml"
+        },
+        "3": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "4": {
+          "name": "support.type.builtin.syaml"
+        },
+        "5": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "6": {
+          "name": "support.type.builtin.syaml"
+        },
+        "7": {
+          "name": "keyword.operator.optional.syaml"
+        }
+      },
+      "match": "^(\\s*[^:#\\n][^:#\\n]*?\\s*:\\s*)(?:\"(string|integer|number|boolean|object|array|null)(\\?)?\"|'(string|integer|number|boolean|object|array|null)(\\?)?'|(string|integer|number|boolean|object|array|null)(\\?)?)\\s*$"
+    },
+    {
+      "captures": {
+        "1": {
+          "name": "variable.other.property.syaml"
+        },
+        "2": {
+          "name": "entity.name.type.syaml"
+        },
+        "3": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "4": {
+          "name": "entity.name.type.syaml"
+        },
+        "5": {
+          "name": "keyword.operator.optional.syaml"
+        },
+        "6": {
+          "name": "entity.name.type.syaml"
+        },
+        "7": {
+          "name": "keyword.operator.optional.syaml"
+        }
+      },
+      "match": "^(\\s*[^:#\\n][^:#\\n]*?\\s*:\\s*)(?:\"([A-Za-z_][\\w.]*)(\\?)?\"|'([A-Za-z_][\\w.]*)(\\?)?'|([A-Za-z_][\\w.]*)(\\?)?)\\s*$"
+    },
+    {
+      "captures": {
+        "1": {
           "name": "variable.other.property.syaml"
         }
       },

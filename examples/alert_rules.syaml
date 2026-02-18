@@ -1,17 +1,16 @@
 ---!syaml/v0
 ---schema
-types:
-  RuleList:
-    type: array
-    minItems: 2
-    items:
-      type: string
-    constraints:
-      - "len(value) >= 2"
-  AlertCount:
-    type: integer
-    constraints:
-      - "value == len(rules)"
+RuleList:
+  type: array
+  minItems: 2
+  items:
+    type: string
+  constraints:
+    - "len(value) >= 2"
+AlertCount:
+  type: integer
+  constraints:
+    - "value == len(rules)"
 
 ---data
 service <string>: search

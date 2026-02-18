@@ -67,17 +67,15 @@ fn imports_expose_data_and_types_under_namespace_alias() {
         r#"
 ---!syaml/v0
 ---schema
-types:
-  Port:
-    type: integer
-    minimum: 1
-    maximum: 65535
-  Service:
-    type: object
-    required: [port]
-    properties:
-      port:
-        type: Port
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+Service:
+  type: object
+  properties:
+    port:
+      type: Port
 ---data
 defaults:
   port <Port>: 8080
@@ -92,13 +90,15 @@ defaults:
 imports:
   shared: ./shared.syaml
 ---schema
-types: {}
-constraints:
-  service.port:
-    - "value == shared.defaults.port"
+RootService:
+  type: object
+  properties:
+    port:
+      type: shared.Port
+      constraints: "value == shared.defaults.port"
 ---data
 port <shared.Port>: "${shared.defaults.port}"
-service <shared.Service>:
+service <RootService>:
   port: "${port}"
 "#,
     );
@@ -118,7 +118,7 @@ fn import_alias_must_not_conflict_with_existing_data_key() {
         r#"
 ---!syaml/v0
 ---schema
-types: {}
+{}
 ---data
 value: 1
 "#,
@@ -132,7 +132,7 @@ value: 1
 imports:
   shared: ./shared.syaml
 ---schema
-types: {}
+{}
 ---data
 shared: already_here
 "#,
@@ -156,7 +156,7 @@ fn imports_detect_cycles() {
 imports:
   b: ./b.syaml
 ---schema
-types: {}
+{}
 ---data
 name: a
 "#,
@@ -170,7 +170,7 @@ name: a
 imports:
   a: ./a.syaml
 ---schema
-types: {}
+{}
 ---data
 name: b
 "#,

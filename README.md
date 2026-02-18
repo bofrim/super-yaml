@@ -1,6 +1,6 @@
 # super_yaml
 
-`super_yaml` is a Rust crate and CLI for compiling a strict, sectioned YAML dialect (`.syaml`) into resolved JSON or YAML, and for generating first-pass Rust types from `schema.types`.
+`super_yaml` is a Rust crate and CLI for compiling a strict, sectioned YAML dialect (`.syaml`) into resolved JSON or YAML, and for generating first-pass Rust types from schema type definitions.
 
 It combines:
 
@@ -94,23 +94,23 @@ env:
     default: 4
 
 ---schema
-types:
-  Port:
-    type: integer
-    minimum: 1
-    maximum: 65535
-constraints:
-  replicas:
-    - "value >= 1"
-  max_connections:
-    - "value % replicas == 0"
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+ReplicaCount:
+  type: integer
+  constraints: "value >= 1"
+MaxConnections:
+  type: integer
+  constraints: "value % replicas == 0"
 
 ---data
 host <string>: "${env.DB_HOST}"
 port <Port>: 5432
-replicas <integer>: 3
+replicas <ReplicaCount>: 3
 worker_threads <integer>: "=max(2, env.CPU_CORES * 2)"
-max_connections <integer>: "=replicas * worker_threads * 25"
+max_connections <MaxConnections>: "=replicas * worker_threads * 25"
 ```
 
 ## `front_matter.env` Semantics
@@ -157,16 +157,13 @@ Behavior:
 
 ## `schema` Section
 
-### `types`
-
-`types` is a map of named schemas:
+Top-level keys in `schema` are named schemas:
 
 ```yaml
-types:
-  Port:
-    type: integer
-    minimum: 1
-    maximum: 65535
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
 ```
 
 A data key can reference this type using `<TypeName>`.
@@ -174,57 +171,72 @@ A data key can reference this type using `<TypeName>`.
 Schema nodes can also reference named types via `type`:
 
 ```yaml
-types:
-  PositiveNumber:
-    type: number
-    exclusiveMinimum: 0
-  EyeConfig:
-    type: object
-    properties:
-      agent_physical_radius:
-        type: PositiveNumber
+PositiveNumber:
+  type: number
+  exclusiveMinimum: 0
+EyeConfig:
+  type: object
+  properties:
+    agent_physical_radius:
+      type: PositiveNumber
+```
+
+For simple schema nodes where only `type` is needed, you can use shorthand:
+
+```yaml
+BoundsConfig:
+  type: object
+  properties:
+    x_min: number
+    radius: number?
+    agent_port: Port
+```
+
+This is equivalent to:
+
+```yaml
+BoundsConfig:
+  type: object
+  properties:
+    x_min:
+      type: number
+    radius:
+      type: number
+      optional: true
+    agent_port:
+      type: Port
 ```
 
 When a schema node combines `type: <NamedType>` with additional keywords,
 both must pass (logical conjunction / `allOf`-like behavior).
 
-### `constraints`
+### Constraints (type-local)
 
-`constraints` maps paths to one expression or a list of expressions:
+Constraints are defined on schema nodes. Top-level path maps
+(`schema.constraints`) are not supported.
 
-```yaml
-constraints:
-  replicas: "value >= 1"
-  max_connections:
-    - "value >= replicas"
-    - "value % replicas == 0"
-```
+Each `constraints` value can be:
 
-Path format:
+- a string expression
+- a list of string expressions
+- a path map (`<relative_path>: expression | [expressions]`)
 
-- absolute: `$.a.b`
-- shorthand: `a.b` (normalized internally to `$.a.b`)
-
-Within constraints, `value` refers to the targeted node for that path.
-
-Type-local constraints can also live inside `schema.types` and are expanded
-onto each data path that uses that type hint:
+Type-local constraints are expanded onto each data path that uses that type hint:
 
 ```yaml
-types:
-  EpisodeConfig:
-    type: object
-    properties:
-      initial_population_size:
-        type: integer
-        constraints:
-          - "value >= 1"
-          - "value <= max_agents"
-      max_agents:
-        type: integer
-        constraints: "value >= 1"
-    constraints:
-      - "initial_population_size <= max_agents"
+EpisodeConfig:
+  type: object
+  properties:
+    initial_population_size:
+      type: integer
+      constraints:
+        - "value >= 1"
+        - "value <= max_agents"
+    max_agents:
+      type: integer
+      constraints: "value >= 1"
+  constraints:
+    - "initial_population_size <= max_agents"
 ```
 
 Inside type-local constraints:
@@ -239,14 +251,19 @@ The validator supports this subset:
 - common: `type`, `enum`
 - numeric: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 - string: `minLength`, `maxLength`, `pattern`
-- object: `properties`, `required`
+- object: `properties`, `required`, `optional` (on property schemas)
 - array: `items`, `minItems`, `maxItems`
 
 Built-in primitive type names are also accepted directly:
 
 - `string`, `integer`, `number`, `boolean`, `object`, `array`, `null`
 
-Named type references from `schema.types` are accepted anywhere `type` appears.
+Named type references are accepted anywhere `type` appears.
+
+For object schemas, properties are required by default. Mark an individual
+property as optional with `optional: true` (or shorthand `property: TypeName?` /
+`type: TypeName?`). Legacy `required: [...]` lists are
+still accepted.
 
 ## `data` Section and Type Hints
 
@@ -466,7 +483,7 @@ cargo clippy --all-targets --all-features
 - only `from: env` bindings are supported
 - expression variable paths are dot-based object traversal
 - parser is a YAML subset, not full YAML
-- Rust codegen is first-pass and currently targets named `schema.types` only (anonymous inline object schemas become `serde_json::Value`)
+- Rust codegen is first-pass and currently targets named top-level schema definitions only (anonymous inline object schemas become `serde_json::Value`)
 - compilation enforces depth/size guardrails for expressions, constraints, and YAML structures
 
 ## License

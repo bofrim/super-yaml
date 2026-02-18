@@ -7,19 +7,18 @@ env:
     default: SFO-001
 
 ---schema
-types:
-  PositiveInt:
-    type: integer
-    minimum: 1
-  InventoryConfig:
-    type: object
-    constraints:
-      reorder_point:
-        - "value >= 1"
-      target_stock:
-        - "value >= reorder_point"
-      lead_days:
-        - "value <= 30"
+PositiveInt:
+  type: integer
+  minimum: 1
+InventoryConfig:
+  type: object
+  constraints:
+    reorder_point:
+      - "value >= 1"
+    target_stock:
+      - "value >= reorder_point"
+    lead_days:
+      - "value <= 30"
 
 ---data
 store_code <string>: "${env.STORE_CODE}"

@@ -4,10 +4,10 @@
 //! - Common: `type`, `enum`
 //! - Numeric: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 //! - String: `minLength`, `maxLength`, `pattern`
-//! - Object: `properties`, `required`
+//! - Object: `properties`, `required`, `optional` (on property schemas)
 //! - Array: `items`, `minItems`, `maxItems`
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use regex::Regex;
 use serde_json::Value as JsonValue;
@@ -28,26 +28,24 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
         .as_object()
         .ok_or_else(|| SyamlError::SchemaError("schema must be a mapping/object".to_string()))?;
 
-    let mut types = BTreeMap::new();
-    if let Some(types_json) = map.get("types") {
-        let types_map = types_json
-            .as_object()
-            .ok_or_else(|| SyamlError::SchemaError("schema.types must be a mapping".to_string()))?;
-        for (k, v) in types_map {
-            types.insert(k.clone(), v.clone());
+    let type_map = if let Some(types_json) = map.get("types") {
+        if map.len() == 1 {
+            types_json.as_object().ok_or_else(|| {
+                SyamlError::SchemaError("schema.types must be a mapping".to_string())
+            })?
+        } else {
+            return Err(SyamlError::SchemaError(
+                "schema cannot mix legacy 'types' wrapper with direct type definitions"
+                    .to_string(),
+            ));
         }
-    }
+    } else {
+        map
+    };
 
-    let mut constraints = BTreeMap::new();
-    if let Some(constraints_json) = map.get("constraints") {
-        let constraints_map = constraints_json.as_object().ok_or_else(|| {
-            SyamlError::SchemaError("schema.constraints must be a mapping".to_string())
-        })?;
-        for (path, value) in constraints_map {
-            let location = format!("schema.constraints.{}", path);
-            let expressions = parse_constraint_expressions(value, &location, path)?;
-            constraints.insert(path.clone(), expressions);
-        }
+    let mut types = BTreeMap::new();
+    for (k, v) in type_map {
+        types.insert(k.clone(), normalize_schema_node(v.clone()));
     }
 
     let mut type_constraints = BTreeMap::new();
@@ -61,9 +59,60 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
 
     Ok(SchemaDoc {
         types,
-        constraints,
         type_constraints,
     })
+}
+
+fn normalize_schema_node(schema: JsonValue) -> JsonValue {
+    match schema {
+        JsonValue::String(type_name) => {
+            let (normalized_type, optional) = parse_optional_type_marker(&type_name);
+            let mut out = serde_json::Map::new();
+            out.insert("type".to_string(), JsonValue::String(normalized_type.to_string()));
+            if optional {
+                out.insert("optional".to_string(), JsonValue::Bool(true));
+            }
+            JsonValue::Object(out)
+        }
+        JsonValue::Object(mut map) => {
+            if let Some(type_name) = map.get("type").and_then(JsonValue::as_str) {
+                let (normalized_type, optional) = parse_optional_type_marker(type_name);
+                if normalized_type != type_name {
+                    map.insert(
+                        "type".to_string(),
+                        JsonValue::String(normalized_type.to_string()),
+                    );
+                    if optional && !map.contains_key("optional") {
+                        map.insert("optional".to_string(), JsonValue::Bool(true));
+                    }
+                }
+            }
+
+            if let Some(properties) = map.get_mut("properties") {
+                if let Some(property_map) = properties.as_object_mut() {
+                    for property_schema in property_map.values_mut() {
+                        let normalized = normalize_schema_node(property_schema.clone());
+                        *property_schema = normalized;
+                    }
+                }
+            }
+
+            if let Some(items) = map.get_mut("items") {
+                let normalized = normalize_schema_node(items.clone());
+                *items = normalized;
+            }
+
+            JsonValue::Object(map)
+        }
+        other => other,
+    }
+}
+
+fn parse_optional_type_marker(type_name: &str) -> (&str, bool) {
+    match type_name.strip_suffix('?') {
+        Some(base) if !base.is_empty() => (base, true),
+        _ => (type_name, false),
+    }
 }
 
 fn collect_type_constraints(
@@ -104,14 +153,14 @@ fn parse_type_local_constraints(
 ) -> Result<(), SyamlError> {
     match value {
         JsonValue::String(_) | JsonValue::Array(_) => {
-            let location = format!("schema.types.{}.constraints", type_name);
+            let location = format!("schema.{}.constraints", type_name);
             let expressions = parse_constraint_expressions(value, &location, current_path)?;
             append_constraints(out, current_path, expressions);
             Ok(())
         }
         JsonValue::Object(map) => {
             for (relative_path, raw_exprs) in map {
-                let location = format!("schema.types.{}.constraints.{}", type_name, relative_path);
+                let location = format!("schema.{}.constraints.{}", type_name, relative_path);
                 let expressions =
                     parse_constraint_expressions(raw_exprs, &location, relative_path)?;
                 let joined_path =
@@ -121,7 +170,7 @@ fn parse_type_local_constraints(
             Ok(())
         }
         _ => Err(SyamlError::SchemaError(format!(
-            "schema.types.{}.constraints must be string, list of strings, or mapping",
+            "schema.{}.constraints must be string, list of strings, or mapping",
             type_name
         ))),
     }
@@ -189,7 +238,7 @@ fn join_constraint_paths(base: &str, relative: &str) -> String {
 
 /// Resolves a type name to a schema object.
 ///
-/// If `type_name` exists in `schema.types`, that definition is returned.
+/// If `type_name` exists in the schema section, that definition is returned.
 /// Otherwise, built-in primitive names (`string`, `integer`, etc.) are mapped
 /// to a schema object `{ "type": "<name>" }`.
 pub fn resolve_type_schema(schema: &SchemaDoc, type_name: &str) -> Result<JsonValue, SyamlError> {
@@ -205,7 +254,7 @@ pub fn resolve_type_schema(schema: &SchemaDoc, type_name: &str) -> Result<JsonVa
     }
 
     Err(SyamlError::TypeHintError(format!(
-        "unknown type '{}'; not found in schema.types",
+        "unknown type '{}'; not found in schema",
         type_name
     )))
 }
@@ -302,7 +351,7 @@ fn validate_named_type_reference(
 ) -> Result<(), SyamlError> {
     let referenced_schema = ctx.types.get(type_name).ok_or_else(|| {
         SyamlError::SchemaError(format!(
-            "unknown type reference at {path}: '{type_name}' not found in schema.types"
+            "unknown type reference at {path}: '{type_name}' not found in schema"
         ))
     })?;
 
@@ -441,14 +490,10 @@ fn validate_object_keywords(
         None => return Ok(()),
     };
 
-    if let Some(required) = schema.get("required") {
-        let arr = required.as_array().ok_or_else(|| {
-            SyamlError::SchemaError(format!("required at {path} must be an array"))
-        })?;
-        for req in arr {
-            let key = req.as_str().ok_or_else(|| {
-                SyamlError::SchemaError(format!("required entries at {path} must be strings"))
-            })?;
+    let explicit_required = parse_required_property_set(schema, path)?;
+
+    if let Some(required) = explicit_required.as_ref() {
+        for key in required {
             if !obj.contains_key(key) {
                 return Err(SyamlError::SchemaError(format!(
                     "required property missing at {path}: '{key}'"
@@ -462,6 +507,20 @@ fn validate_object_keywords(
             SyamlError::SchemaError(format!("properties at {path} must be an object"))
         })?;
         for (k, child_schema) in prop_map {
+            let optional = property_is_optional(child_schema, path, k)?;
+            let required = match explicit_required.as_ref() {
+                // Legacy behavior: explicit `required` controls requiredness.
+                Some(set) => set.contains(k.as_str()),
+                // New default: all properties are required unless `optional: true`.
+                None => !optional,
+            };
+
+            if required && !obj.contains_key(k) {
+                return Err(SyamlError::SchemaError(format!(
+                    "required property missing at {path}: '{k}'"
+                )));
+            }
+
             if let Some(child_value) = obj.get(k) {
                 let child_path = format!("{}.{}", path, k);
                 validate_json_against_schema_inner(
@@ -476,6 +535,48 @@ fn validate_object_keywords(
     }
 
     Ok(())
+}
+
+fn parse_required_property_set(
+    schema: &serde_json::Map<String, JsonValue>,
+    path: &str,
+) -> Result<Option<HashSet<String>>, SyamlError> {
+    let Some(required) = schema.get("required") else {
+        return Ok(None);
+    };
+
+    let arr = required
+        .as_array()
+        .ok_or_else(|| SyamlError::SchemaError(format!("required at {path} must be an array")))?;
+
+    let mut out = HashSet::new();
+    for req in arr {
+        let key = req.as_str().ok_or_else(|| {
+            SyamlError::SchemaError(format!("required entries at {path} must be strings"))
+        })?;
+        out.insert(key.to_string());
+    }
+
+    Ok(Some(out))
+}
+
+fn property_is_optional(
+    child_schema: &JsonValue,
+    path: &str,
+    key: &str,
+) -> Result<bool, SyamlError> {
+    let Some(child_obj) = child_schema.as_object() else {
+        return Ok(false);
+    };
+    let Some(optional) = child_obj.get("optional") else {
+        return Ok(false);
+    };
+
+    optional.as_bool().ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "optional at {path}.properties.{key}.optional must be a boolean"
+        ))
+    })
 }
 
 fn validate_array_keywords(

@@ -78,10 +78,8 @@ pub struct ImportBinding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parsed schema section.
 pub struct SchemaDoc {
-    /// Named schema definitions under `schema.types`.
+    /// Named schema definitions from top-level keys in the `schema` section.
     pub types: BTreeMap<String, JsonValue>,
-    /// Constraint expressions keyed by JSON path.
-    pub constraints: BTreeMap<String, Vec<String>>,
     /// Type-local constraints keyed by type name, then by type-relative JSON path.
     #[serde(default)]
     pub type_constraints: BTreeMap<String, BTreeMap<String, Vec<String>>>,

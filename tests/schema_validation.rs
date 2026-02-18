@@ -11,24 +11,15 @@ use super_yaml::validate::{
 };
 
 #[test]
-fn parse_schema_accepts_constraints_as_string_or_list() {
+fn parse_schema_treats_top_level_keys_as_types() {
     let raw = json!({
-        "types": {
-            "Port": { "type": "integer", "minimum": 1 }
-        },
-        "constraints": {
-            "replicas": "value >= 1",
-            "workers": ["value >= 1", "value >= replicas"]
-        }
+        "Port": { "type": "integer", "minimum": 1 },
+        "Replicas": { "type": "integer", "minimum": 1 }
     });
 
     let schema = parse_schema(&raw).unwrap();
     assert!(schema.types.contains_key("Port"));
-    assert_eq!(
-        schema.constraints.get("replicas").unwrap(),
-        &vec!["value >= 1".to_string()]
-    );
-    assert_eq!(schema.constraints.get("workers").unwrap().len(), 2);
+    assert!(schema.types.contains_key("Replicas"));
 }
 
 #[test]
@@ -98,10 +89,90 @@ fn parse_schema_collects_type_local_constraint_path_map() {
 }
 
 #[test]
+fn parse_schema_normalizes_string_type_shorthand_for_nested_nodes() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "BoundsConfig": {
+                "type": "object",
+                "properties": {
+                    "x_min": "number",
+                    "x_max": "number?",
+                    "y_min": { "type": "number?" },
+                    "tags": {
+                        "type": "array",
+                        "items": "string"
+                    }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        schema.types["BoundsConfig"]["properties"]["x_min"]["type"],
+        json!("number")
+    );
+    assert_eq!(
+        schema.types["BoundsConfig"]["properties"]["x_max"]["type"],
+        json!("number")
+    );
+    assert_eq!(
+        schema.types["BoundsConfig"]["properties"]["x_max"]["optional"],
+        json!(true)
+    );
+    assert_eq!(
+        schema.types["BoundsConfig"]["properties"]["y_min"]["type"],
+        json!("number")
+    );
+    assert_eq!(
+        schema.types["BoundsConfig"]["properties"]["y_min"]["optional"],
+        json!(true)
+    );
+    assert_eq!(
+        schema.types["BoundsConfig"]["properties"]["tags"]["items"]["type"],
+        json!("string")
+    );
+
+    validate_json_against_schema_with_types(
+        &json!({"x_min": 1.5, "tags": ["a", "b"]}),
+        schema.types.get("BoundsConfig").unwrap(),
+        "$.bounds",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_type_hints_accepts_shorthand_property_type_reference() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "Service": {
+                "type": "object",
+                "properties": {
+                    "port": "Port"
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let data = json!({"service": {"port": 8080}});
+    let mut hints = BTreeMap::new();
+    hints.insert("$.service".to_string(), "Service".to_string());
+    hints.insert("$.service.port".to_string(), "Port".to_string());
+
+    validate_type_hints(&data, &hints, &schema).unwrap();
+}
+
+#[test]
 fn parse_schema_rejects_non_string_constraint_entries() {
     let raw = json!({
-        "constraints": {
-            "x": [true]
+        "types": {
+            "Port": {
+                "type": "integer",
+                "constraints": [true]
+            }
         }
     });
 
@@ -287,6 +358,122 @@ fn validate_constraints_supports_paths_env_and_failures() {
 }
 
 #[test]
+fn validate_constraints_rejects_impossible_variable_ordering() {
+    let data = json!({
+        "window": { "min": 1, "max": 5 }
+    });
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "window".to_string(),
+        vec![
+            "value.min < value.max".to_string(),
+            "value.min > value.max".to_string(),
+        ],
+    );
+
+    let err = validate_constraints(&data, &env, &constraints).unwrap_err();
+    assert!(err.to_string().contains("impossible constraints"));
+    assert!(err.to_string().contains("value.min < value.max"));
+    assert!(err.to_string().contains("value.min > value.max"));
+}
+
+#[test]
+fn validate_constraints_rejects_impossible_ordering_inside_single_and_expression() {
+    let data = json!({
+        "window": { "min": 1, "max": 5 }
+    });
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "window".to_string(),
+        vec!["value.min < value.max && value.min > value.max".to_string()],
+    );
+
+    let err = validate_constraints(&data, &env, &constraints).unwrap_err();
+    assert!(err.to_string().contains("impossible constraints"));
+}
+
+#[test]
+fn validate_constraints_allows_consistent_variable_ordering() {
+    let data = json!({
+        "window": { "min": 1, "max": 5 }
+    });
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "window".to_string(),
+        vec![
+            "value.min <= value.max".to_string(),
+            "value.min != value.max".to_string(),
+        ],
+    );
+
+    validate_constraints(&data, &env, &constraints).unwrap();
+}
+
+#[test]
+fn validate_constraints_rejects_impossible_numeric_range() {
+    let data = json!({"count": 7});
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "count".to_string(),
+        vec!["value < 5".to_string(), "value > 10".to_string()],
+    );
+
+    let err = validate_constraints(&data, &env, &constraints).unwrap_err();
+    assert!(err.to_string().contains("impossible constraints"));
+    assert!(err.to_string().contains("value < 5"));
+    assert!(err.to_string().contains("value > 10"));
+}
+
+#[test]
+fn validate_constraints_rejects_impossible_numeric_range_inside_and_expression() {
+    let data = json!({"count": 7});
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "count".to_string(),
+        vec!["value >= 3 && value < 3".to_string()],
+    );
+
+    let err = validate_constraints(&data, &env, &constraints).unwrap_err();
+    assert!(err.to_string().contains("impossible constraints"));
+}
+
+#[test]
+fn validate_constraints_rejects_exact_value_that_is_disallowed() {
+    let data = json!({"count": 4});
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "count".to_string(),
+        vec!["value == 4".to_string(), "value != 4".to_string()],
+    );
+
+    let err = validate_constraints(&data, &env, &constraints).unwrap_err();
+    assert!(err.to_string().contains("impossible constraints"));
+}
+
+#[test]
+fn validate_constraints_allows_consistent_numeric_range() {
+    let data = json!({"count": 7});
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "count".to_string(),
+        vec![
+            "value >= 5".to_string(),
+            "value <= 10".to_string(),
+            "value != 8".to_string(),
+        ],
+    );
+
+    validate_constraints(&data, &env, &constraints).unwrap();
+}
+
+#[test]
 fn build_effective_constraints_expands_type_local_paths() {
     let schema = parse_schema(&json!({
         "types": {
@@ -300,9 +487,6 @@ fn build_effective_constraints_expands_type_local_paths() {
                 },
                 "constraints": ["initial_population_size <= max_agents"]
             }
-        },
-        "constraints": {
-            "global_limit": "value >= 1"
         }
     }))
     .unwrap();
@@ -318,10 +502,6 @@ fn build_effective_constraints_expands_type_local_paths() {
     assert_eq!(
         effective.get("$.episode").unwrap(),
         &vec!["initial_population_size <= max_agents".to_string()]
-    );
-    assert_eq!(
-        effective.get("global_limit").unwrap(),
-        &vec!["value >= 1".to_string()]
     );
 }
 
@@ -596,11 +776,9 @@ fn validate_json_against_schema_checks_exclusive_maximum() {
 }
 
 #[test]
-fn parse_schema_rejects_bad_constraints_shape() {
-    let err = parse_schema(&json!({"constraints": true})).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("schema.constraints must be a mapping"));
+fn parse_schema_accepts_arbitrary_top_level_type_names() {
+    let schema = parse_schema(&json!({"unknown": true})).unwrap();
+    assert!(schema.types.contains_key("unknown"));
 }
 
 #[test]
@@ -667,7 +845,7 @@ fn validate_constraints_can_use_parent_scope_for_siblings() {
 }
 
 #[test]
-fn validate_json_against_schema_allows_missing_optional_properties() {
+fn validate_json_against_schema_requires_properties_by_default() {
     let value = json!({"name": "svc"});
     let schema = json!({
         "type": "object",
@@ -677,7 +855,41 @@ fn validate_json_against_schema_allows_missing_optional_properties() {
         }
     });
 
+    let err = validate_json_against_schema(&value, &schema, "$").unwrap_err();
+    assert!(err.to_string().contains("required property missing"));
+    assert!(err.to_string().contains("port"));
+}
+
+#[test]
+fn validate_json_against_schema_allows_missing_optional_properties() {
+    let value = json!({"name": "svc"});
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "port": { "type": "integer", "optional": true }
+        }
+    });
+
     validate_json_against_schema(&value, &schema, "$").unwrap();
+}
+
+#[test]
+fn validate_json_against_schema_rejects_invalid_optional_shape() {
+    let err = validate_json_against_schema(
+        &json!({"name": "svc"}),
+        &json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "optional": "yes" }
+            }
+        }),
+        "$",
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("optional"));
+    assert!(err.to_string().contains("must be a boolean"));
 }
 
 #[test]
@@ -834,7 +1046,6 @@ fn validate_constraints_with_float_math() {
 fn parse_schema_accepts_empty_sections() {
     let schema = parse_schema(&json!({})).unwrap();
     assert!(schema.types.is_empty());
-    assert!(schema.constraints.is_empty());
     assert!(schema.type_constraints.is_empty());
 }
 
@@ -852,10 +1063,18 @@ fn validate_type_hints_with_builtin_types() {
 
 #[test]
 fn parse_schema_constraint_entry_must_be_string_or_list() {
-    let err = parse_schema(&json!({"constraints": {"x": 123}})).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("must be string or list of strings"));
+    let err = parse_schema(&json!({
+        "types": {
+            "Port": {
+                "type": "integer",
+                "constraints": 123
+            }
+        }
+    }))
+    .unwrap_err();
+    assert!(err.to_string().contains(
+        "schema.Port.constraints must be string, list of strings, or mapping"
+    ));
 }
 
 #[test]

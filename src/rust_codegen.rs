@@ -1,4 +1,4 @@
-//! Rust type generation from `schema.types`.
+//! Rust type generation from named schema definitions.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -171,7 +171,7 @@ struct RenderState {
 
 fn render_rust_types(types: &BTreeMap<String, JsonValue>) -> String {
     if types.is_empty() {
-        return "// No schema.types definitions found.\n".to_string();
+        return "// No schema definitions found.\n".to_string();
     }
 
     let type_names = build_type_name_map(types);
@@ -308,7 +308,7 @@ fn render_object_struct(
     out.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
     out.push_str(&format!("pub struct {name} {{\n"));
 
-    let required = required_property_set(schema_obj);
+    let required = required_property_set(schema_obj, properties);
     let mut used_fields = HashSet::new();
 
     let mut keys: Vec<&String> = properties.keys().collect();
@@ -343,14 +343,31 @@ fn render_object_struct(
     out
 }
 
-fn required_property_set(schema_obj: &JsonMap<String, JsonValue>) -> HashSet<String> {
-    let mut out = HashSet::new();
-
+fn required_property_set(
+    schema_obj: &JsonMap<String, JsonValue>,
+    properties: &JsonMap<String, JsonValue>,
+) -> HashSet<String> {
+    // Backward-compatible behavior: explicit `required` list takes precedence.
     if let Some(required) = schema_obj.get("required").and_then(JsonValue::as_array) {
+        let mut out = HashSet::new();
         for name in required {
             if let Some(name) = name.as_str() {
                 out.insert(name.to_string());
             }
+        }
+        return out;
+    }
+
+    // New default: all properties are required unless `optional: true`.
+    let mut out = HashSet::new();
+    for (name, property_schema) in properties {
+        let optional = property_schema
+            .as_object()
+            .and_then(|obj| obj.get("optional"))
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        if !optional {
+            out.insert(name.clone());
         }
     }
 
@@ -603,23 +620,22 @@ mod tests {
         let input = r#"
 ---!syaml/v0
 ---schema
-types:
-  MessageKind:
-    enum: [join, leave]
-  WsMessage:
-    type: object
-    required: [kind, room_id]
-    properties:
-      kind:
-        type: MessageKind
-      room_id:
-        type: string
-      payload:
-        type: object
-  Batch:
-    type: array
-    items:
-      type: WsMessage
+MessageKind:
+  enum: [join, leave]
+WsMessage:
+  type: object
+  properties:
+    kind:
+      type: MessageKind
+    room_id:
+      type: string
+    payload:
+      type: object
+      optional: true
+Batch:
+  type: array
+  items:
+    type: WsMessage
 ---data
 example: 1
 "#;
@@ -637,7 +653,7 @@ example: 1
     #[test]
     fn renders_empty_type_set() {
         let rendered = render_rust_types(&BTreeMap::new());
-        assert!(rendered.contains("No schema.types definitions found"));
+        assert!(rendered.contains("No schema definitions found"));
     }
 
     #[test]

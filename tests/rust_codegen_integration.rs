@@ -46,23 +46,22 @@ fn generate_rust_types_from_inline_document() {
     let input = r#"
 ---!syaml/v0
 ---schema
-types:
-  MessageKind:
-    enum: [join, leave]
-  WsMessage:
-    type: object
-    required: [kind, room_id]
-    properties:
-      kind:
-        type: MessageKind
-      room_id:
-        type: string
-      payload:
-        type: object
-  Batch:
-    type: array
-    items:
-      type: WsMessage
+MessageKind:
+  enum: [join, leave]
+WsMessage:
+  type: object
+  properties:
+    kind:
+      type: MessageKind
+    room_id:
+      type: string
+    payload:
+      type: object
+      optional: true
+Batch:
+  type: array
+  items:
+    type: WsMessage
 ---data
 example: 1
 "#;
@@ -85,11 +84,10 @@ fn generate_rust_types_from_path_includes_imported_types() {
         r#"
 ---!syaml/v0
 ---schema
-types:
-  Port:
-    type: integer
-    minimum: 1
-    maximum: 65535
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
 ---data
 port <Port>: 8080
 "#,
@@ -103,13 +101,11 @@ port <Port>: 8080
 imports:
   shared: ./shared.syaml
 ---schema
-types:
-  Service:
-    type: object
-    required: [port]
-    properties:
-      port:
-        type: shared.Port
+Service:
+  type: object
+  properties:
+    port:
+      type: shared.Port
 ---data
 service <Service>:
   port: 8080

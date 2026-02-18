@@ -1,5 +1,5 @@
 //! `super_yaml` compiles sectioned `.syaml` documents into resolved JSON or YAML,
-//! and can generate first-pass Rust types from `schema.types`.
+//! and can generate first-pass Rust types from named schema definitions.
 //!
 //! A document goes through these stages:
 //! 1. Section scanning and shape validation (`---!syaml/v0`, section order, required sections).
@@ -23,7 +23,7 @@ pub mod expr;
 pub mod mini_yaml;
 /// Environment and expression resolution over parsed data.
 pub mod resolve;
-/// Rust type generation from `schema.types`.
+/// Rust type generation from named schema definitions.
 pub mod rust_codegen;
 /// Schema parsing and schema-based validation helpers.
 pub mod schema;
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn parses_minimal_document() {
-        let input = "---!syaml/v0\n---schema\ntypes: {}\n---data\nname: x\n";
+        let input = "---!syaml/v0\n---schema\n{}\n---data\nname: x\n";
         let parsed = parse_document(input).unwrap();
         assert_eq!(parsed.version, "v0");
         assert!(parsed.front_matter.is_none());
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn missing_marker_fails() {
-        let input = "---schema\ntypes: {}\n---data\nname: x\n";
+        let input = "---schema\n{}\n---data\nname: x\n";
         let err = parse_document(input).unwrap_err();
         assert!(err.to_string().contains("marker error"));
     }
@@ -571,20 +571,20 @@ env:
     key: CPU_CORES
     default: 4
 ---schema
-types:
-  Port:
-    type: integer
-    minimum: 1
-    maximum: 65535
-constraints:
-  replicas:
-    - "value >= 1"
-  max_connections:
-    - "value % replicas == 0"
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+ReplicaCount:
+  type: integer
+  constraints: "value >= 1"
+MaxConnections:
+  type: integer
+  constraints: "value % replicas == 0"
 ---data
-replicas <integer>: 3
+replicas <ReplicaCount>: 3
 worker_threads <integer>: "=max(2, env.CPU_CORES * 2)"
-max_connections <integer>: "=replicas * worker_threads * 25"
+max_connections <MaxConnections>: "=replicas * worker_threads * 25"
 port <Port>: 5432
 "#;
 
@@ -598,21 +598,19 @@ port <Port>: 5432
         let input = r#"
 ---!syaml/v0
 ---schema
-types:
-  EpisodeConfig:
-    type: object
-    required: [initial_population_size, max_agents]
-    properties:
-      initial_population_size:
-        type: integer
-        constraints:
-          - "value >= 1"
-          - "value <= max_agents"
-      max_agents:
-        type: integer
-        constraints: "value >= 1"
-    constraints:
-      - "initial_population_size <= max_agents"
+EpisodeConfig:
+  type: object
+  properties:
+    initial_population_size:
+      type: integer
+      constraints:
+        - "value >= 1"
+        - "value <= max_agents"
+    max_agents:
+      type: integer
+      constraints: "value >= 1"
+  constraints:
+    - "initial_population_size <= max_agents"
 ---data
 episode <EpisodeConfig>:
   initial_population_size: 3
@@ -632,16 +630,14 @@ episode <EpisodeConfig>:
         let input = r#"
 ---!syaml/v0
 ---schema
-types:
-  EpisodeConfig:
-    type: object
-    required: [initial_population_size, max_agents]
-    constraints:
-      initial_population_size:
-        - "value >= 1"
-        - "value <= max_agents"
-      max_agents:
-        - "value >= 1"
+EpisodeConfig:
+  type: object
+  constraints:
+    initial_population_size:
+      - "value >= 1"
+      - "value <= max_agents"
+    max_agents:
+      - "value >= 1"
 ---data
 episode <EpisodeConfig>:
   initial_population_size: 3
@@ -661,17 +657,15 @@ episode <EpisodeConfig>:
         let input = r#"
 ---!syaml/v0
 ---schema
-types:
-  EpisodeConfig:
-    type: object
-    required: [initial_population_size, max_agents]
-    properties:
-      initial_population_size:
-        type: integer
-      max_agents:
-        type: integer
-    constraints:
-      - "initial_population_size <= max_agents"
+EpisodeConfig:
+  type: object
+  properties:
+    initial_population_size:
+      type: integer
+    max_agents:
+      type: integer
+  constraints:
+    - "initial_population_size <= max_agents"
 ---data
 episode <EpisodeConfig>:
   initial_population_size: 6
@@ -693,7 +687,7 @@ env:
     key: DB_HOST
     required: true
 ---schema
-types: {}
+{}
 ---data
 host <string>: "${env.DB_HOST}"
 "#;
@@ -709,7 +703,7 @@ host <string>: "${env.DB_HOST}"
         let input = r#"
 ---!syaml/v0
 ---schema
-types: {}
+{}
 ---data
 a <integer>: "=b + 1"
 b <integer>: "=a + 1"
@@ -724,12 +718,11 @@ b <integer>: "=a + 1"
         let input = r#"
 ---!syaml/v0
 ---schema
-types: {}
-constraints:
-  replicas:
-    - "value >= 5"
+MinReplicas:
+  type: integer
+  constraints: "value >= 5"
 ---data
-replicas <integer>: 3
+replicas <MinReplicas>: 3
 "#;
 
         let err = validate_document(input, &env_provider(&[])).unwrap_err();
@@ -741,7 +734,7 @@ replicas <integer>: 3
         let input = r#"
 ---!syaml/v0
 ---schema
-types: {}
+{}
 ---data
 a <string>: hello
 b <string>: world
@@ -757,7 +750,7 @@ msg <string>: "${a} ${b}"
         let input = r#"
 ---!syaml/v0
 ---schema
-types: {}
+{}
 ---data
 name <string>: super_yaml
 count <integer>: 3

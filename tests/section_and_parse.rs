@@ -20,7 +20,7 @@ fn scan_sections_accepts_front_matter_schema_data_order() {
 ---front_matter
 env: {}
 ---schema
-types: {}
+{}
 ---data
 name: test
 "#;
@@ -37,14 +37,14 @@ name: test
 
 #[test]
 fn scan_sections_requires_marker_on_first_non_empty_line() {
-    let input = "---schema\ntypes: {}\n---data\na: 1\n";
+    let input = "---schema\n{}\n---data\na: 1\n";
     let err = scan_sections(input).unwrap_err();
     assert!(err.to_string().contains("expected first non-empty line"));
 }
 
 #[test]
 fn scan_sections_rejects_content_before_first_section() {
-    let input = "---!syaml/v0\nhello\n---schema\ntypes: {}\n---data\na: 1\n";
+    let input = "---!syaml/v0\nhello\n---schema\n{}\n---data\na: 1\n";
     let err = scan_sections(input).unwrap_err();
     assert!(err
         .to_string()
@@ -53,15 +53,15 @@ fn scan_sections_rejects_content_before_first_section() {
 
 #[test]
 fn scan_sections_rejects_unknown_duplicate_and_wrong_order() {
-    let unknown = "---!syaml/v0\n---schema\ntypes: {}\n---unknown\na: 1\n";
+    let unknown = "---!syaml/v0\n---schema\n{}\n---unknown\na: 1\n";
     let err = scan_sections(unknown).unwrap_err();
     assert!(err.to_string().contains("unknown section 'unknown'"));
 
-    let duplicate = "---!syaml/v0\n---schema\ntypes: {}\n---schema\ntypes: {}\n---data\na: 1\n";
+    let duplicate = "---!syaml/v0\n---schema\n{}\n---schema\n{}\n---data\na: 1\n";
     let err = scan_sections(duplicate).unwrap_err();
     assert!(err.to_string().contains("duplicate section 'schema'"));
 
-    let wrong_order = "---!syaml/v0\n---data\na: 1\n---schema\ntypes: {}\n";
+    let wrong_order = "---!syaml/v0\n---data\na: 1\n---schema\n{}\n";
     let err = scan_sections(wrong_order).unwrap_err();
     assert!(err.to_string().contains("invalid section order"));
 }
@@ -78,7 +78,7 @@ fn parse_document_wraps_yaml_errors_with_section_name() {
     let input = r#"
 ---!syaml/v0
 ---schema
-types: {}
+{}
 ---data
 root:
   a: 1
@@ -96,7 +96,7 @@ fn parse_document_requires_valid_section_set_and_order() {
     let input = r#"
 ---!syaml/v0
 ---schema
-types: {}
+{}
 "#;
 
     let err = parse_document(input).unwrap_err();
@@ -110,7 +110,7 @@ fn parse_document_validates_front_matter_env_shape() {
 ---front_matter
 env: 123
 ---schema
-types: {}
+{}
 ---data
 name: test
 "#;
@@ -129,7 +129,7 @@ fn parse_document_parses_front_matter_imports() {
 imports:
   shared: ./shared.syaml
 ---schema
-types: {}
+{}
 ---data
 name: test
 "#;
@@ -147,7 +147,7 @@ fn parse_document_rejects_invalid_import_alias() {
 imports:
   bad-alias: ./shared.syaml
 ---schema
-types: {}
+{}
 ---data
 name: test
 "#;
@@ -166,7 +166,7 @@ env:
     from: file
     key: TOKEN_FILE
 ---schema
-types: {}
+{}
 ---data
 name: ok
 "#;
@@ -184,7 +184,7 @@ env:
   TOKEN:
     from: env
 ---schema
-types: {}
+{}
 ---data
 name: ok
 "#;
@@ -198,7 +198,7 @@ fn validate_document_reports_type_violations() {
     let input = r#"
 ---!syaml/v0
 ---schema
-types: {}
+{}
 ---data
 count <integer>: "abc"
 "#;
@@ -218,7 +218,7 @@ env:
     key: OPTIONAL
     required: false
 ---schema
-types: {}
+{}
 ---data
 value <null>: "${env.OPTIONAL}"
 "#;
@@ -227,8 +227,43 @@ value <null>: "${env.OPTIONAL}"
 }
 
 #[test]
+fn validate_document_accepts_schema_property_type_shorthand() {
+    let input = r#"
+---!syaml/v0
+---schema
+BoundsConfig:
+  type: object
+  properties:
+    x_min: number
+---data
+bounds <BoundsConfig>:
+  x_min: 1.5
+"#;
+
+    validate_document(input, &env_provider(&[])).unwrap();
+}
+
+#[test]
+fn validate_document_accepts_optional_schema_property_type_shorthand() {
+    let input = r#"
+---!syaml/v0
+---schema
+Circle:
+  type: object
+  properties:
+    radius: number?
+    label: string
+---data
+circle <Circle>:
+  label: unit
+"#;
+
+    validate_document(input, &env_provider(&[])).unwrap();
+}
+
+#[test]
 fn parse_document_handles_trailing_newlines() {
-    let input = "---!syaml/v0\n---schema\ntypes: {}\n---data\nname: x\n\n\n";
+    let input = "---!syaml/v0\n---schema\n{}\n---data\nname: x\n\n\n";
     let parsed = parse_document(input).unwrap();
     assert_eq!(parsed.version, "v0");
     assert_eq!(parsed.data.value["name"], "x");

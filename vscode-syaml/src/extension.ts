@@ -15,6 +15,7 @@ const TOKEN_TYPES = [
   "variable",
   "property",
   "type",
+  "class",
   "operator"
 ] as const;
 const TOKEN_LEGEND = new vscode.SemanticTokensLegend([...TOKEN_TYPES], []);
@@ -221,6 +222,8 @@ class SyamlSemanticTokensProvider
     document: vscode.TextDocument
   ): vscode.ProviderResult<vscode.SemanticTokens> {
     const collector = new TokenCollector();
+    const typeDefinitionKeysByLine = collectTypeDefinitionKeyRangesByLine(document);
+    let currentSection: "front_matter" | "schema" | "data" | undefined;
 
     for (let line = 0; line < document.lineCount; line += 1) {
       const text = document.lineAt(line).text;
@@ -240,12 +243,14 @@ class SyamlSemanticTokensProvider
         collector.add(line, markerMatch[1].length, markerMatch[2].length, "keyword");
       }
 
-      const sectionMatch = /^(\s*)(---(?:front_matter|schema|data))\s*$/.exec(code);
+      const sectionMatch = /^(\s*)---(front_matter|schema|data)\s*$/.exec(code);
       if (sectionMatch) {
+        currentSection = sectionMatch[2] as "front_matter" | "schema" | "data";
+        const marker = `---${sectionMatch[2]}`;
         collector.add(
           line,
           sectionMatch[1].length,
-          sectionMatch[2].length,
+          marker.length,
           "keyword"
         );
       }
@@ -260,17 +265,72 @@ class SyamlSemanticTokensProvider
           const keyName = typeMatch[1].trim();
           if (keyName.length > 0) {
             const keyStart = keyOffset + keyRaw.indexOf(keyName);
-            collector.add(line, keyStart, keyName.length, "property");
+            collector.add(
+              line,
+              keyStart,
+              keyName.length,
+              isTypeDefinitionKeyRange(
+                typeDefinitionKeysByLine,
+                line,
+                keyStart,
+                keyName.length
+              )
+                ? "class"
+                : "property"
+            );
           }
 
           const typeName = typeMatch[3];
           const typeStart = keyOffset + keyRaw.indexOf(typeName);
-          collector.add(line, typeStart, typeName.length, "type");
+          collector.add(
+            line,
+            typeStart,
+            typeName.length,
+            isBuiltinTypeName(typeName) ? "keyword" : "type"
+          );
         } else {
           const keyName = keyRaw.trim();
           if (keyName.length > 0) {
             const keyStart = keyOffset + keyRaw.indexOf(keyName);
-            collector.add(line, keyStart, keyName.length, "property");
+            collector.add(
+              line,
+              keyStart,
+              keyName.length,
+              isTypeDefinitionKeyRange(
+                typeDefinitionKeysByLine,
+                line,
+                keyStart,
+                keyName.length
+              )
+                ? "class"
+                : "property"
+            );
+          }
+        }
+      }
+
+      if (currentSection === "schema") {
+        for (const reference of parseSchemaTypeValueReferences(code)) {
+          collector.add(
+            line,
+            reference.start,
+            reference.name.length,
+            reference.isBuiltin ? "keyword" : "type"
+          );
+          if (reference.optionalMarkerStart !== undefined) {
+            collector.add(line, reference.optionalMarkerStart, 1, "operator");
+          }
+        }
+
+        for (const shorthand of parseSchemaInlineTypeShorthandReferences(code)) {
+          collector.add(
+            line,
+            shorthand.start,
+            shorthand.name.length,
+            shorthand.isBuiltin ? "keyword" : "type"
+          );
+          if (shorthand.optionalMarkerStart !== undefined) {
+            collector.add(line, shorthand.optionalMarkerStart, 1, "operator");
           }
         }
       }
@@ -496,10 +556,41 @@ function collectRegexTokens(
   }
 }
 
+function collectTypeDefinitionKeyRangesByLine(
+  document: vscode.TextDocument
+): Map<number, Array<{ start: number; end: number }>> {
+  const byLine = new Map<number, Array<{ start: number; end: number }>>();
+  for (const definition of collectTypeDefinitions(document)) {
+    const line = definition.range.start.line;
+    const ranges = byLine.get(line) ?? [];
+    ranges.push({
+      start: definition.range.start.character,
+      end: definition.range.end.character
+    });
+    byLine.set(line, ranges);
+  }
+  return byLine;
+}
+
+function isTypeDefinitionKeyRange(
+  byLine: Map<number, Array<{ start: number; end: number }>>,
+  line: number,
+  start: number,
+  length: number
+): boolean {
+  const ranges = byLine.get(line);
+  if (!ranges) {
+    return false;
+  }
+  const end = start + length;
+  return ranges.some((range) => range.start === start && range.end === end);
+}
+
 function collectTypeOccurrences(document: vscode.TextDocument): TypeOccurrence[] {
   return [
     ...collectTypeDefinitions(document),
-    ...collectTypeHintReferences(document)
+    ...collectTypeHintReferences(document),
+    ...collectSchemaTypeReferences(document)
   ];
 }
 
@@ -510,9 +601,7 @@ function collectTypeDefinitions(document: vscode.TextDocument): TypeOccurrence[]
   }
 
   const occurrences: TypeOccurrence[] = [];
-  let inTypesSection = false;
-  let typesIndent = -1;
-  let typeEntryIndent: number | undefined;
+  const stack: Array<{ indent: number; key: string }> = [];
 
   for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
     const code = lineWithoutComment(document.lineAt(line).text);
@@ -528,31 +617,7 @@ function collectTypeDefinitions(document: vscode.TextDocument): TypeOccurrence[]
     const indent = keyMatch[1].length;
     const rawKey = keyMatch[2];
     const keyName = rawKey.trim();
-
-    if (!inTypesSection) {
-      if (keyName === "types") {
-        inTypesSection = true;
-        typesIndent = indent;
-        typeEntryIndent = undefined;
-      }
-      continue;
-    }
-
-    if (indent <= typesIndent) {
-      if (keyName === "types") {
-        inTypesSection = true;
-        typesIndent = indent;
-        typeEntryIndent = undefined;
-      } else {
-        inTypesSection = false;
-      }
-      continue;
-    }
-
-    if (typeEntryIndent === undefined) {
-      typeEntryIndent = indent;
-    }
-    if (indent !== typeEntryIndent) {
+    if (keyName.length === 0) {
       continue;
     }
 
@@ -561,10 +626,22 @@ function collectTypeDefinitions(document: vscode.TextDocument): TypeOccurrence[]
       continue;
     }
 
-    const start = indent + type.offset;
+    const keyStart = indent + type.offset;
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+    stack.push({ indent, key: keyName });
+
+    const fullPath = stack.map((entry) => entry.key);
+    const isTopLevelType = fullPath.length === 1 && keyName !== "types";
+    const isLegacyWrappedType = fullPath.length === 2 && fullPath[0] === "types";
+    if (!isTopLevelType && !isLegacyWrappedType) {
+      continue;
+    }
+
     occurrences.push({
       name: type.name,
-      range: new vscode.Range(line, start, line, start + type.name.length),
+      range: new vscode.Range(line, keyStart, line, keyStart + type.name.length),
       kind: "definition"
     });
   }
@@ -610,6 +687,55 @@ function collectTypeHintReferences(document: vscode.TextDocument): TypeOccurrenc
   return occurrences;
 }
 
+function collectSchemaTypeReferences(document: vscode.TextDocument): TypeOccurrence[] {
+  const bounds = findSectionBounds(document, "schema");
+  if (!bounds) {
+    return [];
+  }
+
+  const occurrences: TypeOccurrence[] = [];
+  for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    for (const reference of parseSchemaTypeValueReferences(code)) {
+      if (reference.isBuiltin) {
+        continue;
+      }
+      occurrences.push({
+        name: reference.name,
+        range: new vscode.Range(
+          line,
+          reference.start,
+          line,
+          reference.start + reference.name.length
+        ),
+        kind: "reference"
+      });
+    }
+
+    for (const shorthand of parseSchemaInlineTypeShorthandReferences(code)) {
+      if (shorthand.isBuiltin) {
+        continue;
+      }
+      occurrences.push({
+        name: shorthand.name,
+        range: new vscode.Range(
+          line,
+          shorthand.start,
+          line,
+          shorthand.start + shorthand.name.length
+        ),
+        kind: "reference"
+      });
+    }
+  }
+
+  return occurrences;
+}
+
 function buildSchemaTypeIndex(document: vscode.TextDocument): SchemaTypeIndex {
   const bounds = findSectionBounds(document, "schema");
   const roots = new Map<string, SchemaNodeLite>();
@@ -644,12 +770,24 @@ function buildSchemaTypeIndex(document: vscode.TextDocument): SchemaTypeIndex {
     stack.push({ indent, key: keyName });
 
     const fullPath = stack.map((entry) => entry.key);
-    if (fullPath[0] !== "types" || fullPath.length < 2) {
+    let typeName: string | undefined;
+    let relPath: string[] = [];
+
+    if (fullPath[0] === "types") {
+      if (fullPath.length < 2) {
+        continue;
+      }
+      typeName = fullPath[1];
+      relPath = fullPath.slice(2);
+    } else {
+      typeName = fullPath[0];
+      relPath = fullPath.slice(1);
+    }
+
+    if (!typeName || !/^[A-Za-z_][\w.]*$/.test(typeName)) {
       continue;
     }
 
-    const typeName = fullPath[1];
-    const relPath = fullPath.slice(2);
     const typeRoot = ensureTypeRoot(roots, typeName);
 
     if (relPath.length >= 2 && relPath[relPath.length - 2] === "properties") {
@@ -753,22 +891,24 @@ function extractTypeNameFromValue(valueText: string): string | undefined {
     return undefined;
   }
 
-  const quoted = /^(["'])([A-Za-z_][\w.]*)\1$/.exec(valueText);
+  const quoted = /^(["'])([A-Za-z_][\w.]*)(\?)?\1$/.exec(valueText);
   if (quoted) {
     return quoted[2];
   }
-  if (/^[A-Za-z_][\w.]*$/.test(valueText)) {
-    return valueText;
+
+  const plain = /^([A-Za-z_][\w.]*)(\?)?$/.exec(valueText);
+  if (plain) {
+    return plain[1];
   }
 
   const inlineType =
-    /(?:^|[{,]\s*)type\s*:\s*(?:"([A-Za-z_][\w.]*)"|'([A-Za-z_][\w.]*)'|([A-Za-z_][\w.]*))(?:\s*[,}].*|\s*$)/.exec(
+    /(?:^|[{,]\s*)type\s*:\s*(?:"([A-Za-z_][\w.]*)(\?)?"|'([A-Za-z_][\w.]*)(\?)?'|([A-Za-z_][\w.]*)(\?)?)(?:\s*[,}].*|\s*$)/.exec(
       valueText
     );
   if (!inlineType) {
     return undefined;
   }
-  return inlineType[1] ?? inlineType[2] ?? inlineType[3];
+  return inlineType[1] ?? inlineType[3] ?? inlineType[5];
 }
 
 function inferSchemaTypeFromAncestor(
@@ -971,6 +1111,9 @@ function pushTypeHintReference(
   if (!typeHint) {
     return;
   }
+  if (isBuiltinTypeName(typeHint.name)) {
+    return;
+  }
 
   const start = keyOffset + typeHint.offset;
   occurrences.push({
@@ -1012,6 +1155,91 @@ function parseTypeHint(rawKey: string): { name: string; offset: number } | undef
     name: typeName,
     offset: match[1].length + typeOffsetInHint
   };
+}
+
+function parseSchemaTypeValueReferences(
+  code: string
+): Array<{
+  name: string;
+  start: number;
+  isBuiltin: boolean;
+  optionalMarkerStart?: number;
+}> {
+  const references: Array<{
+    name: string;
+    start: number;
+    isBuiltin: boolean;
+    optionalMarkerStart?: number;
+  }> = [];
+  const typeRegex =
+    /(?:^\s*|[{,]\s*)type\s*:\s*(?:"([A-Za-z_][\w.]*)(\?)?"|'([A-Za-z_][\w.]*)(\?)?'|([A-Za-z_][\w.]*)(\?)?)/g;
+
+  for (let match = typeRegex.exec(code); match; match = typeRegex.exec(code)) {
+    const typeName = match[1] ?? match[3] ?? match[5];
+    if (!typeName) {
+      continue;
+    }
+
+    const optionalSuffix = match[2] ?? match[4] ?? match[6] ?? "";
+    const fullToken = `${typeName}${optionalSuffix}`;
+    const offsetInMatch = match[0].lastIndexOf(fullToken);
+    if (offsetInMatch < 0) {
+      continue;
+    }
+    const start = match.index + offsetInMatch;
+
+    references.push({
+      name: typeName,
+      start,
+      isBuiltin: isBuiltinTypeName(typeName),
+      optionalMarkerStart: optionalSuffix.length > 0 ? start + typeName.length : undefined
+    });
+  }
+
+  return references;
+}
+
+function parseSchemaInlineTypeShorthandReferences(
+  code: string
+): Array<{
+  name: string;
+  start: number;
+  isBuiltin: boolean;
+  optionalMarkerStart?: number;
+}> {
+  const lineMatch =
+    /^(\s*)([^:#\n][^:#\n]*?)(\s*):\s*(?:"([A-Za-z_][\w.]*)(\?)?"|'([A-Za-z_][\w.]*)(\?)?'|([A-Za-z_][\w.]*)(\?)?)\s*$/.exec(
+      code
+    );
+  if (!lineMatch) {
+    return [];
+  }
+
+  const keyName = lineMatch[2].trim();
+  if (keyName === "type") {
+    return [];
+  }
+
+  const typeName = lineMatch[4] ?? lineMatch[6] ?? lineMatch[8];
+  if (!typeName) {
+    return [];
+  }
+
+  const optionalSuffix = lineMatch[5] ?? lineMatch[7] ?? lineMatch[9] ?? "";
+  const fullToken = `${typeName}${optionalSuffix}`;
+  const start = code.lastIndexOf(fullToken);
+  if (start < 0) {
+    return [];
+  }
+
+  return [
+    {
+      name: typeName,
+      start,
+      isBuiltin: isBuiltinTypeName(typeName),
+      optionalMarkerStart: optionalSuffix.length > 0 ? start + typeName.length : undefined
+    }
+  ];
 }
 
 function findTypeOccurrenceAtPosition(

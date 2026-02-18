@@ -1,20 +1,16 @@
 ---!syaml/v0
 ---schema
-types:
-  PositiveNumber:
-    type: number
-    exclusiveMinimum: 0
-  StereoVisionEye:
-    type: object
-    required:
-      - agent_physical_radius
-      - baseline
-    properties:
-      agent_physical_radius:
-        type: PositiveNumber
-        maximum: 25
-      baseline:
-        type: PositiveNumber
+PositiveNumber:
+  type: number
+  exclusiveMinimum: 0
+StereoVisionEye:
+  type: object
+  properties:
+    agent_physical_radius:
+      type: PositiveNumber
+      maximum: 25
+    baseline:
+      type: PositiveNumber
 
 ---data
 agent:
