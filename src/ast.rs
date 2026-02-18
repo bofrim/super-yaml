@@ -12,8 +12,8 @@ use crate::error::SyamlError;
 pub struct ParsedDocument {
     /// Format version extracted from the marker line (`---!syaml/v0` -> `v0`).
     pub version: String,
-    /// Optional `front_matter` section containing external bindings.
-    pub front_matter: Option<FrontMatter>,
+    /// Optional `meta` section containing file metadata and external bindings.
+    pub meta: Option<Meta>,
     /// Parsed schema section.
     pub schema: SchemaDoc,
     /// Parsed data section plus extracted type hints.
@@ -48,9 +48,13 @@ impl CompiledDocument {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Optional `front_matter` section values.
-pub struct FrontMatter {
+/// Optional `meta` section values.
+pub struct Meta {
+    /// Optional file-level metadata attached to the document.
+    #[serde(default)]
+    pub file: BTreeMap<String, JsonValue>,
     /// Symbol-to-environment binding map.
+    #[serde(default)]
     pub env: BTreeMap<String, EnvBinding>,
     /// Named imports for pulling in external `.syaml` documents.
     #[serde(default)]
@@ -58,7 +62,7 @@ pub struct FrontMatter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Single environment binding definition from `front_matter.env`.
+/// Single environment binding definition from `meta.env`.
 pub struct EnvBinding {
     /// Environment variable key to read from process/provider.
     pub key: String,
@@ -69,7 +73,7 @@ pub struct EnvBinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Single import entry from `front_matter.imports`.
+/// Single import entry from `meta.imports`.
 pub struct ImportBinding {
     /// Filesystem path to another `.syaml` document.
     pub path: String,

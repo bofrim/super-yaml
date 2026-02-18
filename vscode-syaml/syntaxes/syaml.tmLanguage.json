@@ -7,7 +7,7 @@
       "name": "keyword.control.syaml"
     },
     {
-      "match": "^\\s*---(front_matter|schema|data)\\s*$",
+      "match": "^\\s*---(meta|schema|data)\\s*$",
       "name": "keyword.control.section.syaml"
     },
     {

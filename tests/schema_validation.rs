@@ -1072,9 +1072,9 @@ fn parse_schema_constraint_entry_must_be_string_or_list() {
         }
     }))
     .unwrap_err();
-    assert!(err.to_string().contains(
-        "schema.Port.constraints must be string, list of strings, or mapping"
-    ));
+    assert!(err
+        .to_string()
+        .contains("schema.Port.constraints must be string, list of strings, or mapping"));
 }
 
 #[test]

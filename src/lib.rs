@@ -42,12 +42,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
 
-use ast::{CompiledDocument, DataDoc, EnvBinding, FrontMatter, ImportBinding, ParsedDocument};
+use ast::{CompiledDocument, DataDoc, EnvBinding, ImportBinding, Meta, ParsedDocument};
 pub use error::SyamlError;
 use resolve::{resolve_env_bindings, resolve_expressions};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
 pub use rust_codegen::{generate_rust_types, generate_rust_types_from_path};
-use schema::parse_schema;
+use schema::{parse_schema, validate_schema_type_references};
 use section_scanner::scan_sections;
 use type_hints::normalize_data_with_hints;
 use validate::{build_effective_constraints, validate_constraints, validate_type_hints};
@@ -60,22 +60,25 @@ use validate::{build_effective_constraints, validate_constraints, validate_type_
 pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
     let (version, sections) = scan_sections(input)?;
 
-    let mut front_matter: Option<FrontMatter> = None;
-    let mut schema = None;
-    let mut data = None;
+    let mut meta: Option<Meta> = None;
+    let mut schema = parse_schema(&JsonValue::Object(serde_json::Map::new()))?;
+    let mut data = DataDoc {
+        value: JsonValue::Object(serde_json::Map::new()),
+        type_hints: BTreeMap::new(),
+    };
 
     for section in sections {
         let section_value = parse_section_value(&section.name, &section.body)?;
         match section.name.as_str() {
-            "front_matter" => {
-                front_matter = Some(parse_front_matter(&section_value)?);
+            "meta" => {
+                meta = Some(parse_meta(&section_value)?);
             }
             "schema" => {
-                schema = Some(parse_schema(&section_value)?);
+                schema = parse_schema(&section_value)?;
             }
             "data" => {
                 let (value, type_hints) = normalize_data_with_hints(&section_value)?;
-                data = Some(DataDoc { value, type_hints });
+                data = DataDoc { value, type_hints };
             }
             _ => unreachable!("validated by section scanner"),
         }
@@ -83,13 +86,9 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
 
     Ok(ParsedDocument {
         version,
-        front_matter,
-        schema: schema.ok_or_else(|| {
-            SyamlError::SectionError("missing required section 'schema'".to_string())
-        })?,
-        data: data.ok_or_else(|| {
-            SyamlError::SectionError("missing required section 'data'".to_string())
-        })?,
+        meta,
+        schema,
+        data,
     })
 }
 
@@ -243,11 +242,12 @@ fn compile_parsed_document(
     let mut schema = parsed.schema;
     let mut data = parsed.data.value.clone();
 
-    if let Some(front_matter) = parsed.front_matter.as_ref() {
-        merge_imports(front_matter, base_dir, &mut schema.types, &mut data, ctx)?;
+    if let Some(meta) = parsed.meta.as_ref() {
+        merge_imports(meta, base_dir, &mut schema.types, &mut data, ctx)?;
     }
+    validate_schema_type_references(&schema.types)?;
 
-    let env_values = resolve_env_bindings(parsed.front_matter.as_ref(), ctx.env_provider)?;
+    let env_values = resolve_env_bindings(parsed.meta.as_ref(), ctx.env_provider)?;
     resolve_expressions(&mut data, &env_values)?;
 
     validate_type_hints(&data, &parsed.data.type_hints, &schema)?;
@@ -261,15 +261,21 @@ fn compile_parsed_document(
 }
 
 fn merge_imports(
-    front_matter: &FrontMatter,
+    meta: &Meta,
     base_dir: &Path,
     type_registry: &mut BTreeMap<String, JsonValue>,
     data: &mut JsonValue,
     ctx: &mut CompileContext<'_>,
 ) -> Result<(), SyamlError> {
-    for (alias, binding) in &front_matter.imports {
+    for (alias, binding) in &meta.imports {
         let import_path = resolve_import_path(base_dir, &binding.path)?;
-        let imported = compile_document_from_file(&import_path, ctx)?;
+        let imported = compile_document_from_file(&import_path, ctx).map_err(|e| {
+            SyamlError::ImportError(format!(
+                "failed to compile import '{}' for namespace '{}': {e}",
+                import_path.display(),
+                alias
+            ))
+        })?;
         insert_imported_data_namespace(data, alias, imported.value.clone())?;
         insert_imported_types(type_registry, alias, &imported.exported_types)?;
     }
@@ -408,17 +414,30 @@ fn parse_section_value(section: &str, body: &str) -> Result<JsonValue, SyamlErro
     })
 }
 
-fn parse_front_matter(value: &JsonValue) -> Result<FrontMatter, SyamlError> {
+fn parse_meta(value: &JsonValue) -> Result<Meta, SyamlError> {
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::SchemaError("front_matter section must be a mapping/object".to_string())
+        SyamlError::SchemaError("meta section must be a mapping/object".to_string())
     })?;
+
+    let file = match map.get("file") {
+        Some(file_value) => {
+            let file_map = file_value.as_object().ok_or_else(|| {
+                SyamlError::SchemaError("meta.file must be a mapping/object".to_string())
+            })?;
+            file_map
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        }
+        None => BTreeMap::new(),
+    };
 
     let mut env = BTreeMap::new();
     let mut imports = BTreeMap::new();
 
     if let Some(env_value) = map.get("env") {
         let env_map = env_value.as_object().ok_or_else(|| {
-            SyamlError::SchemaError("front_matter.env must be a mapping/object".to_string())
+            SyamlError::SchemaError("meta.env must be a mapping/object".to_string())
         })?;
 
         for (symbol, binding_value) in env_map {
@@ -429,7 +448,7 @@ fn parse_front_matter(value: &JsonValue) -> Result<FrontMatter, SyamlError> {
 
     if let Some(imports_value) = map.get("imports") {
         let imports_map = imports_value.as_object().ok_or_else(|| {
-            SyamlError::SchemaError("front_matter.imports must be a mapping/object".to_string())
+            SyamlError::SchemaError("meta.imports must be a mapping/object".to_string())
         })?;
         for (alias, import_value) in imports_map {
             let binding = parse_import_binding(alias, import_value)?;
@@ -437,31 +456,25 @@ fn parse_front_matter(value: &JsonValue) -> Result<FrontMatter, SyamlError> {
         }
     }
 
-    Ok(FrontMatter { env, imports })
+    Ok(Meta { file, env, imports })
 }
 
 fn parse_env_binding(symbol: &str, value: &JsonValue) -> Result<EnvBinding, SyamlError> {
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::SchemaError(format!(
-            "front_matter.env.{} must be a mapping/object",
-            symbol
-        ))
+        SyamlError::SchemaError(format!("meta.env.{} must be a mapping/object", symbol))
     })?;
 
     let from = map.get("from").and_then(|v| v.as_str()).unwrap_or("env");
 
     if from != "env" {
         return Err(SyamlError::SchemaError(format!(
-            "front_matter.env.{} has unsupported from='{}'; only 'env' is supported",
+            "meta.env.{} has unsupported from='{}'; only 'env' is supported",
             symbol, from
         )));
     }
 
     let key = map.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
-        SyamlError::SchemaError(format!(
-            "front_matter.env.{} must define string key",
-            symbol
-        ))
+        SyamlError::SchemaError(format!("meta.env.{} must define string key", symbol))
     })?;
 
     let required = map
@@ -480,7 +493,7 @@ fn parse_env_binding(symbol: &str, value: &JsonValue) -> Result<EnvBinding, Syam
 fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding, SyamlError> {
     if !is_valid_namespace_segment(alias) {
         return Err(SyamlError::SchemaError(format!(
-            "front_matter.imports.{} has invalid namespace alias; expected [A-Za-z_][A-Za-z0-9_]*",
+            "meta.imports.{} has invalid namespace alias; expected [A-Za-z_][A-Za-z0-9_]*",
             alias
         )));
     }
@@ -491,15 +504,12 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                SyamlError::SchemaError(format!(
-                    "front_matter.imports.{} must define string path",
-                    alias
-                ))
+                SyamlError::SchemaError(format!("meta.imports.{} must define string path", alias))
             })?
             .to_string(),
         _ => {
             return Err(SyamlError::SchemaError(format!(
-                "front_matter.imports.{} must be string or mapping/object",
+                "meta.imports.{} must be string or mapping/object",
                 alias
             )))
         }
@@ -507,7 +517,7 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
 
     if path.trim().is_empty() {
         return Err(SyamlError::SchemaError(format!(
-            "front_matter.imports.{} path must be non-empty",
+            "meta.imports.{} path must be non-empty",
             alias
         )));
     }
@@ -550,7 +560,7 @@ mod tests {
         let input = "---!syaml/v0\n---schema\n{}\n---data\nname: x\n";
         let parsed = parse_document(input).unwrap();
         assert_eq!(parsed.version, "v0");
-        assert!(parsed.front_matter.is_none());
+        assert!(parsed.meta.is_none());
     }
 
     #[test]
@@ -564,7 +574,7 @@ mod tests {
     fn compiles_with_expressions_and_constraints() {
         let input = r#"
 ---!syaml/v0
----front_matter
+---meta
 env:
   CPU_CORES:
     from: env
@@ -680,7 +690,7 @@ episode <EpisodeConfig>:
     fn missing_required_env_errors() {
         let input = r#"
 ---!syaml/v0
----front_matter
+---meta
 env:
   DB_HOST:
     from: env

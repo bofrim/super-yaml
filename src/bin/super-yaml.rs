@@ -144,7 +144,7 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
             "--format" => {
                 if i + 1 >= args.len() {
                     return Err(
-                        "missing value for --format (expected json, yaml, or rust)".to_string(),
+                        "missing value for --format (expected json, yaml, or rust)".to_string()
                     );
                 }
                 format = match args[i + 1].as_str() {

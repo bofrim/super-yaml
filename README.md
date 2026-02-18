@@ -67,22 +67,22 @@ If it is missing or different, parsing fails with a marker error.
 
 Only these sections are allowed:
 
-- `front_matter` (optional)
-- `schema` (required)
-- `data` (required)
+- `meta` (optional)
+- `schema` (optional)
+- `data` (optional)
 
-Only these orders are valid:
+Unknown sections and duplicates are rejected. Section order is flexible.
 
-1. `schema`, `data`
-2. `front_matter`, `schema`, `data`
-
-Unknown sections, duplicates, or other orderings are rejected.
+When omitted, `schema` and `data` default to empty objects.
 
 ### Full example
 
 ```yaml
 ---!syaml/v0
----front_matter
+---meta
+file:
+  owner: platform
+  service: inventory
 env:
   DB_HOST:
     from: env
@@ -113,9 +113,25 @@ worker_threads <integer>: "=max(2, env.CPU_CORES * 2)"
 max_connections <MaxConnections>: "=replicas * worker_threads * 25"
 ```
 
-## `front_matter.env` Semantics
+## `meta.file` Semantics
 
-Each binding under `front_matter.env` maps a symbol (e.g. `CPU_CORES`) to a source.
+`meta.file` is an optional mapping for file-level details/metadata.
+
+```yaml
+file:
+  owner: platform
+  service: inventory
+  revision: 3
+```
+
+Rules:
+
+- `file` must be a mapping/object when present.
+- values can be any YAML scalar/array/object supported by the parser.
+
+## `meta.env` Semantics
+
+Each binding under `meta.env` maps a symbol (e.g. `CPU_CORES`) to a source.
 
 Supported fields:
 
@@ -132,9 +148,9 @@ Resolution behavior:
 4. If absent and required, fail.
 5. If absent and not required, produce `null`.
 
-## `front_matter.imports` Semantics
+## `meta.imports` Semantics
 
-`front_matter.imports` loads external `.syaml` documents under a namespace alias.
+`meta.imports` loads external `.syaml` documents under a namespace alias.
 
 ```yaml
 imports:

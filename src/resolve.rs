@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde_json::Value as JsonValue;
 
-use crate::ast::{EnvBinding, FrontMatter};
+use crate::ast::{EnvBinding, Meta};
 use crate::error::SyamlError;
 use crate::expr::eval::{evaluate, EvalContext, EvalError};
 use crate::expr::parse_expression;
@@ -50,17 +50,17 @@ impl EnvProvider for MapEnvProvider {
     }
 }
 
-/// Resolves all `front_matter.env` bindings into concrete JSON values.
+/// Resolves all `meta.env` bindings into concrete JSON values.
 pub fn resolve_env_bindings(
-    front_matter: Option<&FrontMatter>,
+    meta: Option<&Meta>,
     env_provider: &dyn EnvProvider,
 ) -> Result<BTreeMap<String, JsonValue>, SyamlError> {
     let mut out = BTreeMap::new();
-    let Some(front_matter) = front_matter else {
+    let Some(meta) = meta else {
         return Ok(out);
     };
 
-    for (symbol, binding) in &front_matter.env {
+    for (symbol, binding) in &meta.env {
         let value = resolve_one_binding(symbol, binding, env_provider)?;
         out.insert(symbol.clone(), value);
     }

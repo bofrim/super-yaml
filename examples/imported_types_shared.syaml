@@ -1,0 +1,17 @@
+---!syaml/v0
+---schema
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+ServiceDefaults:
+  type: object
+  properties:
+    host:
+      type: string
+    port:
+      type: Port
+---data
+defaults <ServiceDefaults>:
+  host: api.internal
+  port: 8080

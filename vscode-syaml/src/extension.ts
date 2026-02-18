@@ -223,7 +223,7 @@ class SyamlSemanticTokensProvider
   ): vscode.ProviderResult<vscode.SemanticTokens> {
     const collector = new TokenCollector();
     const typeDefinitionKeysByLine = collectTypeDefinitionKeyRangesByLine(document);
-    let currentSection: "front_matter" | "schema" | "data" | undefined;
+    let currentSection: "meta" | "schema" | "data" | undefined;
 
     for (let line = 0; line < document.lineCount; line += 1) {
       const text = document.lineAt(line).text;
@@ -243,9 +243,9 @@ class SyamlSemanticTokensProvider
         collector.add(line, markerMatch[1].length, markerMatch[2].length, "keyword");
       }
 
-      const sectionMatch = /^(\s*)---(front_matter|schema|data)\s*$/.exec(code);
+      const sectionMatch = /^(\s*)---(meta|schema|data)\s*$/.exec(code);
       if (sectionMatch) {
-        currentSection = sectionMatch[2] as "front_matter" | "schema" | "data";
+        currentSection = sectionMatch[2] as "meta" | "schema" | "data";
         const marker = `---${sectionMatch[2]}`;
         collector.add(
           line,
@@ -362,19 +362,53 @@ interface TypeOccurrence {
   kind: "definition" | "reference";
 }
 
+interface ImportNamespace {
+  alias: string;
+  aliasRange: vscode.Range;
+  importPathRange?: vscode.Range;
+  importUri?: vscode.Uri;
+}
+
 class SyamlTypeDefinitionProvider implements vscode.DefinitionProvider {
-  provideDefinition(
+  async provideDefinition(
     document: vscode.TextDocument,
     position: vscode.Position
-  ): vscode.ProviderResult<vscode.Definition> {
+  ): Promise<vscode.Definition | undefined> {
     if (!isSyamlDocument(document)) {
       return undefined;
+    }
+
+    const importNamespaces = collectImportNamespaces(document);
+    const importPathDefinition = findImportPathReferenceAtPosition(
+      position,
+      importNamespaces
+    );
+    if (importPathDefinition) {
+      return importPathDefinition;
+    }
+    const namespaceDefinition = findImportNamespaceReferenceAtPosition(
+      document,
+      position,
+      importNamespaces
+    );
+    if (namespaceDefinition) {
+      return namespaceDefinition;
     }
 
     const occurrences = collectTypeOccurrences(document);
     const target = findTypeOccurrenceAtPosition(occurrences, position);
     if (!target) {
       return findTypedDataKeySchemaDefinition(document, position);
+    }
+
+    const importedLocation = await findImportedDefinitionForTypeOccurrence(
+      document,
+      target,
+      position,
+      importNamespaces
+    );
+    if (importedLocation) {
+      return importedLocation;
     }
 
     const definitions = occurrences.filter(
@@ -424,15 +458,15 @@ class SyamlTypeReferenceProvider implements vscode.ReferenceProvider {
 }
 
 class SyamlInlayHintsProvider implements vscode.InlayHintsProvider {
-  provideInlayHints(
+  async provideInlayHints(
     document: vscode.TextDocument,
     range: vscode.Range
-  ): vscode.ProviderResult<vscode.InlayHint[]> {
+  ): Promise<vscode.InlayHint[]> {
     if (!isSyamlDocument(document)) {
       return [];
     }
 
-    const schemaIndex = buildSchemaTypeIndex(document);
+    const schemaIndex = await buildSchemaTypeIndexWithImports(document);
     if (schemaIndex.roots.size === 0) {
       return [];
     }
@@ -480,11 +514,11 @@ class SyamlInlayHintsProvider implements vscode.InlayHintsProvider {
 
       const hint = new vscode.InlayHint(
         new vscode.Position(location.line, location.end),
-        inferredType,
+        shortTypeName(inferredType),
         vscode.InlayHintKind.Type
       );
       hint.paddingLeft = true;
-      hint.tooltip = `Inferred from ${ancestor.typeName}`;
+      hint.tooltip = `Inferred from ${shortTypeName(ancestor.typeName)}`;
       hints.push(hint);
     }
 
@@ -789,6 +823,15 @@ function buildSchemaTypeIndex(document: vscode.TextDocument): SchemaTypeIndex {
     }
 
     const typeRoot = ensureTypeRoot(roots, typeName);
+    if (relPath.length === 0) {
+      typeRoot.definitionRange = new vscode.Range(
+        line,
+        keyStart,
+        line,
+        keyStart + keyName.length
+      );
+      typeRoot.definitionUri = document.uri;
+    }
 
     if (relPath.length >= 2 && relPath[relPath.length - 2] === "properties") {
       const propertyNode = ensureSchemaNodeByRelPath(typeRoot, relPath);
@@ -798,6 +841,7 @@ function buildSchemaTypeIndex(document: vscode.TextDocument): SchemaTypeIndex {
         line,
         keyStart + keyName.length
       );
+      propertyNode.definitionUri = document.uri;
       const inlinePropertyType = extractTypeNameFromValue(valueText);
       if (inlinePropertyType) {
         propertyNode.typeName = inlinePropertyType;
@@ -831,6 +875,119 @@ function buildSchemaTypeIndex(document: vscode.TextDocument): SchemaTypeIndex {
   }
 
   return { roots };
+}
+
+async function buildSchemaTypeIndexWithImports(
+  document: vscode.TextDocument,
+  stackUris = new Set<string>(),
+  cache = new Map<string, SchemaTypeIndex>()
+): Promise<SchemaTypeIndex> {
+  if (document.uri.scheme !== "file") {
+    return buildSchemaTypeIndex(document);
+  }
+
+  const uriKey = document.uri.toString();
+  const cached = cache.get(uriKey);
+  if (cached) {
+    return cached;
+  }
+  if (stackUris.has(uriKey)) {
+    return buildSchemaTypeIndex(document);
+  }
+
+  const schemaIndex = buildSchemaTypeIndex(document);
+  stackUris.add(uriKey);
+
+  const imports = collectImportNamespaces(document);
+  for (const importNamespace of imports.values()) {
+    if (!importNamespace.importUri) {
+      continue;
+    }
+
+    let importedDocument: vscode.TextDocument;
+    try {
+      importedDocument = await vscode.workspace.openTextDocument(importNamespace.importUri);
+    } catch {
+      continue;
+    }
+    if (!isSyamlDocument(importedDocument)) {
+      continue;
+    }
+
+    const importedIndex = await buildSchemaTypeIndexWithImports(
+      importedDocument,
+      stackUris,
+      cache
+    );
+    mergeImportedSchemaTypeIndex(schemaIndex, importNamespace.alias, importedIndex);
+  }
+
+  stackUris.delete(uriKey);
+  cache.set(uriKey, schemaIndex);
+  return schemaIndex;
+}
+
+function mergeImportedSchemaTypeIndex(
+  target: SchemaTypeIndex,
+  alias: string,
+  imported: SchemaTypeIndex
+): void {
+  if (imported.roots.size === 0) {
+    return;
+  }
+
+  const renameMap = new Map<string, string>();
+  for (const name of imported.roots.keys()) {
+    renameMap.set(name, `${alias}.${name}`);
+  }
+
+  for (const [name, node] of imported.roots) {
+    const namespacedName = renameMap.get(name);
+    if (!namespacedName || target.roots.has(namespacedName)) {
+      continue;
+    }
+    const rewritten = cloneSchemaNodeWithRenamedTypeRefs(node, renameMap);
+    target.roots.set(namespacedName, rewritten);
+  }
+}
+
+function cloneSchemaNodeWithRenamedTypeRefs(
+  source: SchemaNodeLite,
+  renameMap: Map<string, string>
+): SchemaNodeLite {
+  const cloned = createSchemaNode();
+  cloned.definitionRange = source.definitionRange;
+  cloned.definitionUri = source.definitionUri;
+  cloned.hasPropertiesKeyword = source.hasPropertiesKeyword;
+  cloned.hasItemsKeyword = source.hasItemsKeyword;
+
+  const sourceTypeName = source.typeName;
+  if (sourceTypeName && renameMap.has(sourceTypeName) && !isBuiltinTypeName(sourceTypeName)) {
+    cloned.typeName = renameMap.get(sourceTypeName);
+  } else {
+    cloned.typeName = sourceTypeName;
+  }
+
+  for (const [propertyName, propertyNode] of source.properties) {
+    cloned.properties.set(
+      propertyName,
+      cloneSchemaNodeWithRenamedTypeRefs(propertyNode, renameMap)
+    );
+  }
+
+  if (source.items) {
+    cloned.items = cloneSchemaNodeWithRenamedTypeRefs(source.items, renameMap);
+  }
+
+  return cloned;
+}
+
+function shortTypeName(typeName: string): string {
+  const lastDot = typeName.lastIndexOf(".");
+  if (lastDot < 0 || lastDot === typeName.length - 1) {
+    return typeName;
+  }
+  return typeName.slice(lastDot + 1);
 }
 
 function ensureTypeRoot(
@@ -1249,10 +1406,136 @@ function findTypeOccurrenceAtPosition(
   return occurrences.find((occurrence) => occurrence.range.contains(position));
 }
 
-function findTypedDataKeySchemaDefinition(
+function findImportNamespaceReferenceAtPosition(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  importNamespaces: Map<string, ImportNamespace>
+): vscode.Location | undefined {
+  if (importNamespaces.size === 0) {
+    return undefined;
+  }
+
+  const code = lineWithoutComment(document.lineAt(position.line).text);
+  const namespaceRefRegex = /\b([A-Za-z_][\w]*)\.[A-Za-z_][\w.]*/g;
+  for (
+    let match = namespaceRefRegex.exec(code);
+    match;
+    match = namespaceRefRegex.exec(code)
+  ) {
+    const namespace = match[1];
+    const namespaceStart = match.index;
+    const namespaceEnd = namespaceStart + namespace.length;
+    if (position.character < namespaceStart || position.character >= namespaceEnd) {
+      continue;
+    }
+
+    const importNamespace = importNamespaces.get(namespace);
+    if (!importNamespace) {
+      continue;
+    }
+
+    return new vscode.Location(document.uri, importNamespace.aliasRange);
+  }
+
+  return undefined;
+}
+
+function findImportPathReferenceAtPosition(
+  position: vscode.Position,
+  importNamespaces: Map<string, ImportNamespace>
+): vscode.Location | undefined {
+  for (const importNamespace of importNamespaces.values()) {
+    if (!importNamespace.importPathRange || !importNamespace.importUri) {
+      continue;
+    }
+    if (!importNamespace.importPathRange.contains(position)) {
+      continue;
+    }
+
+    return new vscode.Location(importNamespace.importUri, new vscode.Position(0, 0));
+  }
+
+  return undefined;
+}
+
+async function findImportedDefinitionForTypeOccurrence(
+  sourceDocument: vscode.TextDocument,
+  occurrence: TypeOccurrence,
+  position: vscode.Position,
+  importNamespaces: Map<string, ImportNamespace>
+): Promise<vscode.Location | undefined> {
+  const namespaced = parseNamespacedTypeReferenceAtPosition(occurrence, position);
+  if (!namespaced) {
+    return undefined;
+  }
+
+  const importNamespace = importNamespaces.get(namespaced.namespace);
+  if (!importNamespace) {
+    return undefined;
+  }
+
+  if (namespaced.segment === "namespace") {
+    return new vscode.Location(sourceDocument.uri, importNamespace.aliasRange);
+  }
+
+  if (!importNamespace.importUri) {
+    return undefined;
+  }
+
+  let importedDocument: vscode.TextDocument;
+  try {
+    importedDocument = await vscode.workspace.openTextDocument(importNamespace.importUri);
+  } catch {
+    return undefined;
+  }
+
+  if (!isSyamlDocument(importedDocument)) {
+    return undefined;
+  }
+
+  const typeDefinition = findTypeDefinitionRangeByName(importedDocument, namespaced.typeName);
+  if (!typeDefinition) {
+    return undefined;
+  }
+
+  return new vscode.Location(importedDocument.uri, typeDefinition);
+}
+
+function parseNamespacedTypeReferenceAtPosition(
+  occurrence: TypeOccurrence,
+  position: vscode.Position
+):
+  | {
+      namespace: string;
+      typeName: string;
+      segment: "namespace" | "type";
+    }
+  | undefined {
+  const dotIndex = occurrence.name.indexOf(".");
+  if (dotIndex <= 0 || dotIndex >= occurrence.name.length - 1) {
+    return undefined;
+  }
+
+  const offset = position.character - occurrence.range.start.character;
+  if (offset < 0 || offset > occurrence.name.length) {
+    return undefined;
+  }
+
+  if (offset === dotIndex) {
+    return undefined;
+  }
+
+  return {
+    namespace: occurrence.name.slice(0, dotIndex),
+    typeName: occurrence.name.slice(dotIndex + 1),
+    segment: offset < dotIndex ? "namespace" : "type"
+  };
+}
+
+async function findTypedDataKeySchemaDefinition(
   document: vscode.TextDocument,
   position: vscode.Position
-): vscode.Location | undefined {
+): Promise<vscode.Location | undefined> {
   const locations = collectDataKeyLocations(document);
   const clicked = locations.find((location) =>
     new vscode.Range(location.line, location.start, location.line, location.end).contains(
@@ -1274,7 +1557,7 @@ function findTypedDataKeySchemaDefinition(
     return undefined;
   }
 
-  const schemaIndex = buildSchemaTypeIndex(document);
+  const schemaIndex = await buildSchemaTypeIndexWithImports(document);
   if (schemaIndex.roots.size === 0) {
     return undefined;
   }
@@ -1287,20 +1570,25 @@ function findTypedDataKeySchemaDefinition(
     }
 
     if (relativeSegments.length === 0) {
-      const typeDefinition = findTypeDefinitionRangeByName(document, ancestor.typeName);
+      const typeDefinition = findTypeDefinitionLocation(
+        document.uri,
+        schemaIndex,
+        ancestor.typeName
+      );
       if (typeDefinition) {
-        return new vscode.Location(document.uri, typeDefinition);
+        return typeDefinition;
       }
       continue;
     }
 
-    const propertyDefinition = findPropertyDefinitionRangeFromAncestor(
+    const propertyDefinition = findPropertyDefinitionLocationFromAncestor(
+      document.uri,
       schemaIndex,
       ancestor.typeName,
       relativeSegments
     );
     if (propertyDefinition) {
-      return new vscode.Location(document.uri, propertyDefinition);
+      return propertyDefinition;
     }
   }
 
@@ -1331,11 +1619,24 @@ function findTypeDefinitionRangeByName(
   return definitions.find((definition) => definition.name === typeName)?.range;
 }
 
-function findPropertyDefinitionRangeFromAncestor(
+function findTypeDefinitionLocation(
+  fallbackUri: vscode.Uri,
+  schemaIndex: SchemaTypeIndex,
+  typeName: string
+): vscode.Location | undefined {
+  const definition = schemaIndex.roots.get(typeName);
+  if (!definition?.definitionRange) {
+    return undefined;
+  }
+  return new vscode.Location(definition.definitionUri ?? fallbackUri, definition.definitionRange);
+}
+
+function findPropertyDefinitionLocationFromAncestor(
+  fallbackUri: vscode.Uri,
   schemaIndex: SchemaTypeIndex,
   ancestorType: string,
   segments: JsonPathSegment[]
-): vscode.Range | undefined {
+): vscode.Location | undefined {
   const root = createSchemaNode();
   root.typeName = ancestorType;
 
@@ -1348,7 +1649,10 @@ function findPropertyDefinitionRangeFromAncestor(
     current = next;
   }
 
-  return current.definitionRange;
+  if (!current.definitionRange) {
+    return undefined;
+  }
+  return new vscode.Location(current.definitionUri ?? fallbackUri, current.definitionRange);
 }
 
 function isSyamlDocument(document: vscode.TextDocument): boolean {
@@ -1413,16 +1717,34 @@ async function withInputFile<T>(
   document: vscode.TextDocument,
   run: (inputPath: string) => Promise<T>
 ): Promise<T> {
-  const canUseSourcePath = document.uri.scheme === "file" && !document.isDirty;
-  if (canUseSourcePath) {
+  if (document.uri.scheme === "file" && !document.isDirty) {
     return run(document.uri.fsPath);
   }
 
-  const tempPath = path.join(
-    os.tmpdir(),
-    `syaml-vscode-${Date.now()}-${Math.random().toString(16).slice(2)}.syaml`
-  );
-  await fs.writeFile(tempPath, document.getText(), "utf8");
+  const tempName = `syaml-vscode-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}.syaml`;
+  let tempPath = path.join(os.tmpdir(), tempName);
+
+  // Keep dirty file validation in the source directory so relative imports
+  // (for example `./common.syaml`) resolve the same way as on-disk files.
+  if (document.uri.scheme === "file") {
+    const sourceDir = path.dirname(document.uri.fsPath);
+    tempPath = path.join(sourceDir, `.${tempName}`);
+  }
+
+  const text = document.getText();
+  try {
+    await fs.writeFile(tempPath, text, "utf8");
+  } catch {
+    if (document.uri.scheme === "file" && !tempPath.startsWith(os.tmpdir())) {
+      tempPath = path.join(os.tmpdir(), tempName);
+      await fs.writeFile(tempPath, text, "utf8");
+    } else {
+      throw new Error("failed to create temporary SYAML input file");
+    }
+  }
+
   try {
     return await run(tempPath);
   } finally {
@@ -1535,13 +1857,18 @@ function diagnosticRange(document: vscode.TextDocument, message: string): vscode
   }
 
   const absoluteLineNumber = inferAbsoluteLineNumber(document, message);
-  if (!absoluteLineNumber) {
-    return new vscode.Range(0, 0, 0, Math.max(1, document.lineAt(0).text.length));
+  if (absoluteLineNumber) {
+    const lineIndex = Math.max(0, Math.min(document.lineCount - 1, absoluteLineNumber - 1));
+    const length = Math.max(1, document.lineAt(lineIndex).text.length);
+    return new vscode.Range(lineIndex, 0, lineIndex, length);
   }
 
-  const lineIndex = Math.max(0, Math.min(document.lineCount - 1, absoluteLineNumber - 1));
-  const length = Math.max(1, document.lineAt(lineIndex).text.length);
-  return new vscode.Range(lineIndex, 0, lineIndex, length);
+  const unknownTypeRange = inferUnknownTypeRange(document, message);
+  if (unknownTypeRange) {
+    return unknownTypeRange;
+  }
+
+  return new vscode.Range(0, 0, 0, Math.max(1, document.lineAt(0).text.length));
 }
 
 interface DataKeyLocation {
@@ -1566,6 +1893,7 @@ interface JsonPathSegment {
 interface SchemaNodeLite {
   typeName?: string;
   definitionRange?: vscode.Range;
+  definitionUri?: vscode.Uri;
   properties: Map<string, SchemaNodeLite>;
   hasPropertiesKeyword: boolean;
   items?: SchemaNodeLite;
@@ -1768,9 +2096,211 @@ function parseCanonicalKey(
   };
 }
 
+function collectImportNamespaces(document: vscode.TextDocument): Map<string, ImportNamespace> {
+  const metaBounds = findSectionBounds(document, "meta");
+  if (!metaBounds) {
+    return new Map();
+  }
+
+  let importsLine: number | undefined;
+  let importsIndent = 0;
+  for (let line = metaBounds.startLine; line < metaBounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+    if (keyMatch[2].trim() !== "imports") {
+      continue;
+    }
+
+    importsLine = line;
+    importsIndent = keyMatch[1].length;
+    break;
+  }
+
+  if (importsLine === undefined) {
+    return new Map();
+  }
+
+  const namespaces = new Map<string, ImportNamespace>();
+  let childIndent: number | undefined;
+  for (let line = importsLine + 1; line < metaBounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):(.*)$/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    if (indent <= importsIndent) {
+      break;
+    }
+    if (childIndent === undefined) {
+      childIndent = indent;
+    }
+    if (indent !== childIndent) {
+      continue;
+    }
+
+    const aliasRaw = keyMatch[2];
+    const alias = aliasRaw.trim();
+    if (alias.length === 0) {
+      continue;
+    }
+
+    const aliasStart = indent + aliasRaw.indexOf(alias);
+    const aliasRange = new vscode.Range(
+      line,
+      aliasStart,
+      line,
+      aliasStart + alias.length
+    );
+
+    const parsedImportPath = parseImportPathValue(
+      document,
+      line,
+      indent,
+      keyMatch[4],
+      keyMatch[0].length - keyMatch[4].length,
+      metaBounds.endLine
+    );
+
+    namespaces.set(alias, {
+      alias,
+      aliasRange,
+      importPathRange: parsedImportPath?.range,
+      importUri: resolveImportPathUri(document, parsedImportPath?.value)
+    });
+  }
+
+  return namespaces;
+}
+
+function parseImportPathValue(
+  document: vscode.TextDocument,
+  aliasLine: number,
+  aliasIndent: number,
+  inlineValue: string,
+  inlineValueStartCharacter: number,
+  metaSectionEndLine: number
+):
+  | {
+      value: string;
+      range: vscode.Range;
+    }
+  | undefined {
+  const inlinePath = parseStringScalarAt(
+    inlineValue,
+    aliasLine,
+    inlineValueStartCharacter
+  );
+  if (inlinePath) {
+    return inlinePath;
+  }
+
+  for (let line = aliasLine + 1; line < metaSectionEndLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):(.*)$/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    if (indent <= aliasIndent) {
+      break;
+    }
+
+    const key = keyMatch[2].trim();
+    if (key !== "path") {
+      continue;
+    }
+
+    const valueStart = keyMatch[0].length - keyMatch[4].length;
+    return parseStringScalarAt(keyMatch[4], line, valueStart);
+  }
+
+  return undefined;
+}
+
+function parseStringScalarAt(
+  value: string,
+  line: number,
+  startCharacter: number
+): { value: string; range: vscode.Range } | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const tokenOffset = value.indexOf(trimmed);
+  if (tokenOffset < 0) {
+    return undefined;
+  }
+
+  const singleQuoted = /^'([^']*)'$/.exec(trimmed);
+  if (singleQuoted) {
+    const contentStart = startCharacter + tokenOffset + 1;
+    return {
+      value: singleQuoted[1],
+      range: new vscode.Range(
+        line,
+        contentStart,
+        line,
+        contentStart + singleQuoted[1].length
+      )
+    };
+  }
+
+  const doubleQuoted = /^"((?:\\.|[^"])*)"$/.exec(trimmed);
+  if (doubleQuoted) {
+    const unescaped = doubleQuoted[1].replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
+    const contentStart = startCharacter + tokenOffset + 1;
+    return {
+      value: unescaped,
+      range: new vscode.Range(line, contentStart, line, contentStart + doubleQuoted[1].length)
+    };
+  }
+
+  if (/^[^{}\[\],]+$/.test(trimmed)) {
+    const valueStart = startCharacter + tokenOffset;
+    return {
+      value: trimmed,
+      range: new vscode.Range(line, valueStart, line, valueStart + trimmed.length)
+    };
+  }
+
+  return undefined;
+}
+
+function resolveImportPathUri(
+  document: vscode.TextDocument,
+  importPath: string | undefined
+): vscode.Uri | undefined {
+  if (!importPath || document.uri.scheme !== "file") {
+    return undefined;
+  }
+
+  const resolvedPath = path.isAbsolute(importPath)
+    ? importPath
+    : path.resolve(path.dirname(document.uri.fsPath), importPath);
+  return vscode.Uri.file(resolvedPath);
+}
+
 function findSectionBounds(
   document: vscode.TextDocument,
-  sectionName: "front_matter" | "schema" | "data"
+  sectionName: "meta" | "schema" | "data"
 ): { startLine: number; endLine: number } | undefined {
   const marker = `---${sectionName}`;
   for (let i = 0; i < document.lineCount; i += 1) {
@@ -1781,7 +2311,7 @@ function findSectionBounds(
     let endLine = document.lineCount;
     for (let j = i + 1; j < document.lineCount; j += 1) {
       const lineText = document.lineAt(j).text.trim();
-      if (/^---(front_matter|schema|data)\s*$/.test(lineText)) {
+      if (/^---(meta|schema|data)\s*$/.test(lineText)) {
         endLine = j;
         break;
       }
@@ -1844,6 +2374,46 @@ function inferAbsoluteLineNumber(
   }
 
   return parsedLine;
+}
+
+function inferUnknownTypeRange(
+  document: vscode.TextDocument,
+  message: string
+): vscode.Range | undefined {
+  const unknownType = extractUnknownTypeName(message);
+  if (!unknownType) {
+    return undefined;
+  }
+
+  if (/\bunknown type(?: reference)? at schema\./i.test(message)) {
+    for (const occurrence of collectSchemaTypeReferences(document)) {
+      if (occurrence.name === unknownType) {
+        return occurrence.range;
+      }
+    }
+  }
+
+  let firstDefinition: TypeOccurrence | undefined;
+  for (const occurrence of collectTypeOccurrences(document)) {
+    if (occurrence.name !== unknownType) {
+      continue;
+    }
+    if (occurrence.kind === "reference") {
+      return occurrence.range;
+    }
+    if (!firstDefinition) {
+      firstDefinition = occurrence;
+    }
+  }
+
+  return firstDefinition?.range;
+}
+
+function extractUnknownTypeName(message: string): string | undefined {
+  const match = /\bunknown type(?: reference)?(?: at [^:]+:)?\s+['"]([A-Za-z_][\w.]*)['"]/i.exec(
+    message
+  );
+  return match?.[1];
 }
 
 function findCommentStart(text: string): number {

@@ -107,10 +107,16 @@ fn collect_exported_types(
 ) -> Result<BTreeMap<String, JsonValue>, SyamlError> {
     let mut exported = parsed.schema.types;
 
-    if let Some(front_matter) = parsed.front_matter {
-        for (alias, binding) in front_matter.imports {
+    if let Some(meta) = parsed.meta {
+        for (alias, binding) in meta.imports {
             let import_path = resolve_import_path(base_dir, &binding)?;
-            let imported = collect_types_from_file(&import_path, ctx)?;
+            let imported = collect_types_from_file(&import_path, ctx).map_err(|e| {
+                SyamlError::ImportError(format!(
+                    "failed to compile import '{}' for namespace '{}': {e}",
+                    import_path.display(),
+                    alias
+                ))
+            })?;
             insert_imported_types(&mut exported, &alias, &imported)?;
         }
     }

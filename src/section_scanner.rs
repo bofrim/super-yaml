@@ -21,7 +21,7 @@ const MARKER: &str = "---!syaml/v0";
 
 /// Scans a `.syaml` source document into `(version, ordered sections)`.
 ///
-/// Validates marker presence, allowed section names, uniqueness, and required order.
+/// Validates marker presence, allowed section names, and uniqueness.
 pub fn scan_sections(input: &str) -> Result<(String, Vec<Section>), SyamlError> {
     let lines: Vec<&str> = input.lines().collect();
     let mut first_non_empty = None;
@@ -85,12 +85,6 @@ pub fn scan_sections(input: &str) -> Result<(String, Vec<Section>), SyamlError> 
         });
     }
 
-    if sections.is_empty() {
-        return Err(SyamlError::SectionError(
-            "no sections found; expected ---schema and ---data".to_string(),
-        ));
-    }
-
     validate_sections(&sections)?;
     Ok(("v0".to_string(), sections))
 }
@@ -98,7 +92,7 @@ pub fn scan_sections(input: &str) -> Result<(String, Vec<Section>), SyamlError> 
 fn validate_sections(sections: &[Section]) -> Result<(), SyamlError> {
     let mut seen = std::collections::HashSet::new();
     for section in sections {
-        if !matches!(section.name.as_str(), "front_matter" | "schema" | "data") {
+        if !matches!(section.name.as_str(), "meta" | "schema" | "data") {
             return Err(SyamlError::SectionError(format!(
                 "unknown section '{}'",
                 section.name
@@ -111,16 +105,6 @@ fn validate_sections(sections: &[Section]) -> Result<(), SyamlError> {
                 section.name
             )));
         }
-    }
-
-    let order: Vec<&str> = sections.iter().map(|s| s.name.as_str()).collect();
-    let valid_a = vec!["schema", "data"];
-    let valid_b = vec!["front_matter", "schema", "data"];
-    if order != valid_a && order != valid_b {
-        return Err(SyamlError::SectionError(format!(
-            "invalid section order {:?}; expected {:?} or {:?}",
-            order, valid_a, valid_b
-        )));
     }
 
     Ok(())

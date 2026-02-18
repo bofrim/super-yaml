@@ -1,0 +1,13 @@
+{
+  "proxy_port": 8180,
+  "service": {
+    "host": "api.internal",
+    "port": 8080
+  },
+  "shared": {
+    "defaults": {
+      "host": "api.internal",
+      "port": 8080
+    }
+  }
+}

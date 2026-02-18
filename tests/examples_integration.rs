@@ -4,7 +4,9 @@ use std::path::Path;
 
 use serde_json::{json, Value as JsonValue};
 
-use super_yaml::{compile_document, compile_document_to_json, validate_document, MapEnvProvider};
+use super_yaml::{
+    compile_document, compile_document_from_path, validate_document_from_path, MapEnvProvider,
+};
 
 fn read_fixture(path: &str) -> String {
     fs::read_to_string(Path::new(path)).unwrap()
@@ -27,17 +29,18 @@ fn all_examples_compile_to_expected_json() {
         "inventory_policy",
         "alert_rules",
         "type_composition",
+        "imported_types",
     ];
 
     for case in cases {
-        let input = read_fixture(&format!("examples/{case}.syaml"));
+        let path = format!("examples/{case}.syaml");
         let expected_raw = read_fixture(&format!("examples/{case}.expected.json"));
         let expected: JsonValue = serde_json::from_str(&expected_raw).unwrap();
 
-        let compiled = compile_document(&input, &env_provider(&[])).unwrap();
-        assert_eq!(compiled.value, expected, "compiled mismatch for {case}");
+        let compiled = compile_document_from_path(Path::new(&path), &env_provider(&[])).unwrap();
+        assert_eq!(&compiled.value, &expected, "compiled mismatch for {case}");
 
-        let json_out = compile_document_to_json(&input, &env_provider(&[]), true).unwrap();
+        let json_out = compiled.to_json_string(true).unwrap();
         let rendered: JsonValue = serde_json::from_str(&json_out).unwrap();
         assert_eq!(rendered, expected, "json output mismatch for {case}");
     }
@@ -52,11 +55,11 @@ fn all_examples_validate_successfully() {
         "inventory_policy",
         "alert_rules",
         "type_composition",
+        "imported_types",
     ];
 
     for case in cases {
-        let input = read_fixture(&format!("examples/{case}.syaml"));
-        validate_document(&input, &env_provider(&[])).unwrap();
+        validate_document_from_path(format!("examples/{case}.syaml"), &env_provider(&[])).unwrap();
     }
 }
 

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
-use super_yaml::ast::{EnvBinding, FrontMatter};
+use super_yaml::ast::{EnvBinding, Meta};
 use super_yaml::resolve::{
     get_json_path, resolve_env_bindings, resolve_expressions, MapEnvProvider,
 };
@@ -51,12 +51,13 @@ fn resolve_env_bindings_uses_env_defaults_and_null_for_optional() {
         },
     );
 
-    let front_matter = FrontMatter {
+    let meta = Meta {
+        file: BTreeMap::new(),
         env: env_defs,
         imports: BTreeMap::new(),
     };
     let resolved = resolve_env_bindings(
-        Some(&front_matter),
+        Some(&meta),
         &env_provider(&[("NUM_KEY", "42"), ("FLAG_KEY", "true")]),
     )
     .unwrap();
@@ -79,18 +80,19 @@ fn resolve_env_bindings_errors_for_missing_required_without_default() {
         },
     );
 
-    let front_matter = FrontMatter {
+    let meta = Meta {
+        file: BTreeMap::new(),
         env: env_defs,
         imports: BTreeMap::new(),
     };
-    let err = resolve_env_bindings(Some(&front_matter), &env_provider(&[])).unwrap_err();
+    let err = resolve_env_bindings(Some(&meta), &env_provider(&[])).unwrap_err();
     assert!(err
         .to_string()
         .contains("missing required environment variable"));
 }
 
 #[test]
-fn resolve_env_bindings_without_front_matter_returns_empty() {
+fn resolve_env_bindings_without_meta_returns_empty() {
     let resolved = resolve_env_bindings(None, &env_provider(&[])).unwrap();
     assert!(resolved.is_empty());
 }
@@ -107,16 +109,14 @@ fn resolve_env_bindings_redacts_raw_values_in_parse_errors() {
         },
     );
 
-    let front_matter = FrontMatter {
+    let meta = Meta {
+        file: BTreeMap::new(),
         env: env_defs,
         imports: BTreeMap::new(),
     };
-    let err = resolve_env_bindings(
-        Some(&front_matter),
-        &env_provider(&[("BAD_ENV", "\"unterminated")]),
-    )
-    .unwrap_err()
-    .to_string();
+    let err = resolve_env_bindings(Some(&meta), &env_provider(&[("BAD_ENV", "\"unterminated")]))
+        .unwrap_err()
+        .to_string();
 
     assert!(err.contains("failed to parse env 'BAD_ENV'"));
     assert!(!err.contains("\"unterminated"));

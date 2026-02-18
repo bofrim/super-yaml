@@ -61,7 +61,7 @@
     ]
   ],
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(---(front_matter|schema|data)\\s*$|[^#\\n]+:\\s*$)",
+    "increaseIndentPattern": "^\\s*(---(meta|schema|data)\\s*$|[^#\\n]+:\\s*$)",
     "decreaseIndentPattern": "^\\s*[\\]}]"
   }
 }

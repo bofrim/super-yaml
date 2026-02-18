@@ -97,7 +97,7 @@ port <Port>: 8080
         "root.syaml",
         r#"
 ---!syaml/v0
----front_matter
+---meta
 imports:
   shared: ./shared.syaml
 ---schema

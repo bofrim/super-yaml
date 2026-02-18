@@ -1,0 +1,17 @@
+---!syaml/v0
+---meta
+imports:
+  shared: ./imported_types_shared.syaml
+---schema
+Service:
+  type: object
+  properties:
+    host:
+      type: string
+    port:
+      type: shared.Port
+---data
+service <Service>:
+  host: "${shared.defaults.host}"
+  port: "${shared.defaults.port}"
+proxy_port <shared.Port>: "=service.port + 100"

@@ -1,5 +1,5 @@
 ---!syaml/v0
----front_matter
+---meta
 env:
   REGION:
     from: env

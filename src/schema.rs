@@ -35,8 +35,7 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
             })?
         } else {
             return Err(SyamlError::SchemaError(
-                "schema cannot mix legacy 'types' wrapper with direct type definitions"
-                    .to_string(),
+                "schema cannot mix legacy 'types' wrapper with direct type definitions".to_string(),
             ));
         }
     } else {
@@ -63,12 +62,66 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
     })
 }
 
+/// Validates that every schema `type` keyword references either a builtin
+/// primitive or a defined type in the provided registry.
+///
+/// The returned error path is rooted at `schema.<TypeName>...` so callers can
+/// map diagnostics back to schema usage sites.
+pub fn validate_schema_type_references(
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    for (type_name, schema) in types {
+        let root_path = format!("schema.{}", type_name);
+        validate_schema_type_references_inner(schema, types, &root_path)?;
+    }
+    Ok(())
+}
+
+fn validate_schema_type_references_inner(
+    schema: &JsonValue,
+    types: &BTreeMap<String, JsonValue>,
+    path: &str,
+) -> Result<(), SyamlError> {
+    match schema {
+        JsonValue::Object(map) => {
+            for (key, child) in map {
+                let child_path = format!("{path}.{key}");
+                if key == "type" {
+                    let type_name = child.as_str().ok_or_else(|| {
+                        SyamlError::SchemaError(format!(
+                            "schema 'type' at {child_path} must be a string"
+                        ))
+                    })?;
+                    if !is_builtin_type_name(type_name) && !types.contains_key(type_name) {
+                        return Err(SyamlError::SchemaError(format!(
+                            "unknown type reference at {child_path}: '{type_name}' not found in schema"
+                        )));
+                    }
+                }
+                validate_schema_type_references_inner(child, types, &child_path)?;
+            }
+        }
+        JsonValue::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                let item_path = format!("{path}[{index}]");
+                validate_schema_type_references_inner(item, types, &item_path)?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 fn normalize_schema_node(schema: JsonValue) -> JsonValue {
     match schema {
         JsonValue::String(type_name) => {
             let (normalized_type, optional) = parse_optional_type_marker(&type_name);
             let mut out = serde_json::Map::new();
-            out.insert("type".to_string(), JsonValue::String(normalized_type.to_string()));
+            out.insert(
+                "type".to_string(),
+                JsonValue::String(normalized_type.to_string()),
+            );
             if optional {
                 out.insert("optional".to_string(), JsonValue::Bool(true));
             }

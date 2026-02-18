@@ -86,7 +86,7 @@ defaults:
         "root.syaml",
         r#"
 ---!syaml/v0
----front_matter
+---meta
 imports:
   shared: ./shared.syaml
 ---schema
@@ -128,7 +128,7 @@ value: 1
         "root.syaml",
         r#"
 ---!syaml/v0
----front_matter
+---meta
 imports:
   shared: ./shared.syaml
 ---schema
@@ -152,7 +152,7 @@ fn imports_detect_cycles() {
         "a.syaml",
         r#"
 ---!syaml/v0
----front_matter
+---meta
 imports:
   b: ./b.syaml
 ---schema
@@ -166,7 +166,7 @@ name: a
         "b.syaml",
         r#"
 ---!syaml/v0
----front_matter
+---meta
 imports:
   a: ./a.syaml
 ---schema
@@ -180,4 +180,48 @@ name: b
         .unwrap_err()
         .to_string();
     assert!(err.contains("cyclic import detected"));
+}
+
+#[test]
+fn imports_report_missing_namespaced_schema_type_reference() {
+    let dir = TempDir::new("imports_missing_type");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+Port:
+  type: integer
+---data
+defaults:
+  port <Port>: 8080
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared: ./shared.syaml
+---schema
+RootService:
+  type: object
+  properties:
+    port:
+      type: shared.Missing
+---data
+service <RootService>:
+  port: 8080
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("unknown type reference"));
+    assert!(err.contains("shared.Missing"));
+    assert!(err.contains("schema.RootService.properties.port.type"));
 }
