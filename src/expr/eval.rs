@@ -34,6 +34,8 @@ pub struct EvalContext<'a> {
     pub unresolved_paths: &'a HashSet<String>,
     /// Current `value` target for constraint expressions.
     pub current_value: Option<&'a JsonValue>,
+    /// Current object scope used for local lookups in constraint expressions.
+    pub current_scope: Option<&'a JsonValue>,
 }
 
 /// Evaluates an expression AST node into a JSON value.
@@ -104,12 +106,26 @@ fn resolve_var(path: &[String], ctx: &EvalContext<'_>) -> Result<JsonValue, Eval
         return Err(EvalError::Unresolved(full_path));
     }
 
-    lookup_path(ctx.data, path).cloned().ok_or_else(|| {
-        EvalError::Fatal(SyamlError::ExpressionError(format!(
-            "unknown reference '{}'",
-            path.join(".")
-        )))
-    })
+    if let Some(found) = lookup_path(ctx.data, path) {
+        return Ok(found.clone());
+    }
+
+    if let Some(scope) = ctx.current_scope {
+        if let Some(found) = lookup_path(scope, path) {
+            return Ok(found.clone());
+        }
+    }
+
+    if let Some(current) = ctx.current_value {
+        if let Some(found) = lookup_path(current, path) {
+            return Ok(found.clone());
+        }
+    }
+
+    Err(EvalError::Fatal(SyamlError::ExpressionError(format!(
+        "unknown reference '{}'",
+        path.join(".")
+    ))))
 }
 
 fn lookup_path<'a>(root: &'a JsonValue, path: &[String]) -> Option<&'a JsonValue> {

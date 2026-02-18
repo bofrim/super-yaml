@@ -11,17 +11,19 @@ types:
   PositiveInt:
     type: integer
     minimum: 1
-constraints:
-  inventory.reorder_point:
-    - "value >= 1"
-  inventory.target_stock:
-    - "value >= inventory.reorder_point"
-  inventory.lead_days:
-    - "value <= 30"
+  InventoryConfig:
+    type: object
+    constraints:
+      reorder_point:
+        - "value >= 1"
+      target_stock:
+        - "value >= reorder_point"
+      lead_days:
+        - "value <= 30"
 
 ---data
 store_code <string>: "${env.STORE_CODE}"
-inventory:
+inventory <InventoryConfig>:
   sku <string>: WIDGET-XL
   on_hand <PositiveInt>: 42
   reorder_point <PositiveInt>: 20

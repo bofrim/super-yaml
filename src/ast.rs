@@ -72,6 +72,9 @@ pub struct SchemaDoc {
     pub types: BTreeMap<String, JsonValue>,
     /// Constraint expressions keyed by JSON path.
     pub constraints: BTreeMap<String, Vec<String>>,
+    /// Type-local constraints keyed by type name, then by type-relative JSON path.
+    #[serde(default)]
+    pub type_constraints: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

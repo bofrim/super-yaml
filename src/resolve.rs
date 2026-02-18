@@ -207,6 +207,7 @@ fn eval_node(
             env,
             unresolved_paths: unresolved,
             current_value: None,
+            current_scope: None,
         };
         return evaluate(&parsed, &ctx);
     }
@@ -251,6 +252,7 @@ fn evaluate_interpolation(
             env,
             unresolved_paths: unresolved,
             current_value: None,
+            current_scope: None,
         };
         return evaluate(&parsed, &ctx);
     }
@@ -268,6 +270,7 @@ fn evaluate_interpolation(
             env,
             unresolved_paths: unresolved,
             current_value: None,
+            current_scope: None,
         };
         let eval = evaluate(&parsed, &ctx)?;
         out.push_str(&json_to_string(&eval));

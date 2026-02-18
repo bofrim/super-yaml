@@ -39,35 +39,147 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
             SyamlError::SchemaError("schema.constraints must be a mapping".to_string())
         })?;
         for (path, value) in constraints_map {
-            let expressions = match value {
-                JsonValue::String(s) => vec![s.clone()],
-                JsonValue::Array(items) => {
-                    let mut out = Vec::with_capacity(items.len());
-                    for item in items {
-                        match item {
-                            JsonValue::String(s) => out.push(s.clone()),
-                            _ => {
-                                return Err(SyamlError::SchemaError(format!(
-                                    "constraint '{}' entries must be strings",
-                                    path
-                                )))
-                            }
-                        }
-                    }
-                    out
-                }
-                _ => {
-                    return Err(SyamlError::SchemaError(format!(
-                        "constraint '{}' must be string or list of strings",
-                        path
-                    )))
-                }
-            };
+            let location = format!("schema.constraints.{}", path);
+            let expressions = parse_constraint_expressions(value, &location, path)?;
             constraints.insert(path.clone(), expressions);
         }
     }
 
-    Ok(SchemaDoc { types, constraints })
+    let mut type_constraints = BTreeMap::new();
+    for (type_name, type_schema) in &types {
+        let mut collected = BTreeMap::new();
+        collect_type_constraints(type_schema, "$", type_name, &mut collected)?;
+        if !collected.is_empty() {
+            type_constraints.insert(type_name.clone(), collected);
+        }
+    }
+
+    Ok(SchemaDoc {
+        types,
+        constraints,
+        type_constraints,
+    })
+}
+
+fn collect_type_constraints(
+    schema: &JsonValue,
+    current_path: &str,
+    type_name: &str,
+    out: &mut BTreeMap<String, Vec<String>>,
+) -> Result<(), SyamlError> {
+    let Some(schema_obj) = schema.as_object() else {
+        return Ok(());
+    };
+
+    if let Some(raw_constraints) = schema_obj.get("constraints") {
+        parse_type_local_constraints(raw_constraints, current_path, type_name, out)?;
+    }
+
+    if let Some(props_json) = schema_obj.get("properties") {
+        if let Some(prop_map) = props_json.as_object() {
+            for (key, child_schema) in prop_map {
+                let child_path = if current_path == "$" {
+                    format!("$.{}", key)
+                } else {
+                    format!("{}.{}", current_path, key)
+                };
+                collect_type_constraints(child_schema, &child_path, type_name, out)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_type_local_constraints(
+    value: &JsonValue,
+    current_path: &str,
+    type_name: &str,
+    out: &mut BTreeMap<String, Vec<String>>,
+) -> Result<(), SyamlError> {
+    match value {
+        JsonValue::String(_) | JsonValue::Array(_) => {
+            let location = format!("schema.types.{}.constraints", type_name);
+            let expressions = parse_constraint_expressions(value, &location, current_path)?;
+            append_constraints(out, current_path, expressions);
+            Ok(())
+        }
+        JsonValue::Object(map) => {
+            for (relative_path, raw_exprs) in map {
+                let location = format!("schema.types.{}.constraints.{}", type_name, relative_path);
+                let expressions =
+                    parse_constraint_expressions(raw_exprs, &location, relative_path)?;
+                let joined_path =
+                    join_constraint_paths(current_path, &normalize_constraint_path(relative_path));
+                append_constraints(out, &joined_path, expressions);
+            }
+            Ok(())
+        }
+        _ => Err(SyamlError::SchemaError(format!(
+            "schema.types.{}.constraints must be string, list of strings, or mapping",
+            type_name
+        ))),
+    }
+}
+
+fn parse_constraint_expressions(
+    value: &JsonValue,
+    location: &str,
+    path_label: &str,
+) -> Result<Vec<String>, SyamlError> {
+    match value {
+        JsonValue::String(s) => Ok(vec![s.clone()]),
+        JsonValue::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    JsonValue::String(s) => out.push(s.clone()),
+                    _ => {
+                        return Err(SyamlError::SchemaError(format!(
+                            "constraint '{}' entries must be strings",
+                            path_label
+                        )))
+                    }
+                }
+            }
+            Ok(out)
+        }
+        _ => Err(SyamlError::SchemaError(format!(
+            "{location} must be string or list of strings"
+        ))),
+    }
+}
+
+fn append_constraints(
+    constraints: &mut BTreeMap<String, Vec<String>>,
+    path: &str,
+    expressions: Vec<String>,
+) {
+    constraints
+        .entry(path.to_string())
+        .or_default()
+        .extend(expressions);
+}
+
+fn normalize_constraint_path(path: &str) -> String {
+    if path == "$" || path.starts_with("$.") {
+        path.to_string()
+    } else {
+        format!("$.{}", path)
+    }
+}
+
+fn join_constraint_paths(base: &str, relative: &str) -> String {
+    let base_norm = normalize_constraint_path(base);
+    let rel_norm = normalize_constraint_path(relative);
+
+    if rel_norm == "$" {
+        base_norm
+    } else if base_norm == "$" {
+        rel_norm
+    } else {
+        format!("{}{}", base_norm, &rel_norm[1..])
+    }
 }
 
 /// Resolves a type name to a schema object.

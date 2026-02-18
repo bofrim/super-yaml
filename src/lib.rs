@@ -43,7 +43,7 @@ pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
 use schema::parse_schema;
 use section_scanner::scan_sections;
 use type_hints::normalize_data_with_hints;
-use validate::{validate_constraints, validate_type_hints};
+use validate::{build_effective_constraints, validate_constraints, validate_type_hints};
 
 /// Parses a `.syaml` document into its structured representation.
 ///
@@ -101,7 +101,8 @@ pub fn compile_document(
     resolve_expressions(&mut resolved_data, &env_values)?;
 
     validate_type_hints(&resolved_data, &parsed.data.type_hints, &parsed.schema)?;
-    validate_constraints(&resolved_data, &env_values, &parsed.schema.constraints)?;
+    let constraints = build_effective_constraints(&parsed.data.type_hints, &parsed.schema);
+    validate_constraints(&resolved_data, &env_values, &constraints)?;
 
     Ok(CompiledDocument {
         value: resolved_data,
@@ -269,6 +270,95 @@ port <Port>: 5432
         let compiled = compile_document(input, &env_provider(&[("CPU_CORES", "8")])).unwrap();
         assert_eq!(compiled.value["worker_threads"], json!(16));
         assert_eq!(compiled.value["max_connections"], json!(1200));
+    }
+
+    #[test]
+    fn compiles_with_type_local_constraints() {
+        let input = r#"
+---!syaml/v0
+---schema
+types:
+  EpisodeConfig:
+    type: object
+    required: [initial_population_size, max_agents]
+    properties:
+      initial_population_size:
+        type: integer
+        constraints:
+          - "value >= 1"
+          - "value <= max_agents"
+      max_agents:
+        type: integer
+        constraints: "value >= 1"
+    constraints:
+      - "initial_population_size <= max_agents"
+---data
+episode <EpisodeConfig>:
+  initial_population_size: 3
+  max_agents: 5
+"#;
+
+        let compiled = compile_document(input, &env_provider(&[])).unwrap();
+        assert_eq!(
+            compiled.value["episode"]["initial_population_size"],
+            json!(3)
+        );
+        assert_eq!(compiled.value["episode"]["max_agents"], json!(5));
+    }
+
+    #[test]
+    fn compiles_with_type_local_constraint_path_map() {
+        let input = r#"
+---!syaml/v0
+---schema
+types:
+  EpisodeConfig:
+    type: object
+    required: [initial_population_size, max_agents]
+    constraints:
+      initial_population_size:
+        - "value >= 1"
+        - "value <= max_agents"
+      max_agents:
+        - "value >= 1"
+---data
+episode <EpisodeConfig>:
+  initial_population_size: 3
+  max_agents: 5
+"#;
+
+        let compiled = compile_document(input, &env_provider(&[])).unwrap();
+        assert_eq!(
+            compiled.value["episode"]["initial_population_size"],
+            json!(3)
+        );
+        assert_eq!(compiled.value["episode"]["max_agents"], json!(5));
+    }
+
+    #[test]
+    fn type_local_constraint_failure_is_reported() {
+        let input = r#"
+---!syaml/v0
+---schema
+types:
+  EpisodeConfig:
+    type: object
+    required: [initial_population_size, max_agents]
+    properties:
+      initial_population_size:
+        type: integer
+      max_agents:
+        type: integer
+    constraints:
+      - "initial_population_size <= max_agents"
+---data
+episode <EpisodeConfig>:
+  initial_population_size: 6
+  max_agents: 5
+"#;
+
+        let err = compile_document(input, &env_provider(&[])).unwrap_err();
+        assert!(err.to_string().contains("constraint failed"));
     }
 
     #[test]

@@ -18,6 +18,7 @@ fn eval_with(
         env,
         unresolved_paths: unresolved,
         current_value,
+        current_scope: None,
     };
     evaluate(&expr, &ctx)
 }

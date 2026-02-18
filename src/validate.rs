@@ -36,6 +36,30 @@ pub fn validate_type_hints(
     Ok(())
 }
 
+/// Builds the full constraint set for a document by combining top-level
+/// `schema.constraints` with type-local constraints from hinted paths.
+pub fn build_effective_constraints(
+    hints: &BTreeMap<String, String>,
+    schema: &SchemaDoc,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = schema.constraints.clone();
+
+    for (hint_path, type_name) in hints {
+        let Some(type_local) = schema.type_constraints.get(type_name) else {
+            continue;
+        };
+
+        for (relative_path, expressions) in type_local {
+            let absolute_path = join_paths(hint_path, relative_path);
+            out.entry(absolute_path)
+                .or_default()
+                .extend(expressions.iter().cloned());
+        }
+    }
+
+    out
+}
+
 /// Evaluates schema constraints against data and environment context.
 ///
 /// Constraints are keyed by path and must evaluate to boolean values.
@@ -68,6 +92,7 @@ pub fn validate_constraints(
                 path, normalized_path
             ))
         })?;
+        let current_scope = parent_path(&normalized_path).and_then(|p| get_json_path(data, &p));
 
         for expression in expressions {
             let source = expression.trim().trim_start_matches('=').trim();
@@ -84,6 +109,7 @@ pub fn validate_constraints(
                 env,
                 unresolved_paths: &unresolved,
                 current_value: Some(value),
+                current_scope,
             };
 
             let result = evaluate(&ast, &ctx).map_err(map_eval_error)?;
@@ -115,6 +141,40 @@ fn normalize_path(path: &str) -> String {
         path.to_string()
     } else {
         format!("$.{}", path)
+    }
+}
+
+fn join_paths(base: &str, relative: &str) -> String {
+    let base_norm = normalize_path(base);
+    let rel_norm = normalize_path(relative);
+
+    if rel_norm == "$" {
+        base_norm
+    } else if base_norm == "$" {
+        rel_norm
+    } else {
+        format!("{}{}", base_norm, &rel_norm[1..])
+    }
+}
+
+fn parent_path(path: &str) -> Option<String> {
+    if path == "$" {
+        return None;
+    }
+
+    let mut last_sep = None;
+    for (idx, ch) in path.char_indices() {
+        if ch == '.' && idx > 1 {
+            last_sep = Some(idx);
+        } else if ch == '[' {
+            last_sep = Some(idx);
+        }
+    }
+
+    match last_sep {
+        Some(1) => Some("$".to_string()),
+        Some(idx) => Some(path[..idx].to_string()),
+        None => None,
     }
 }
 

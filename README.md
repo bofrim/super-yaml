@@ -161,6 +161,31 @@ Path format:
 
 Within constraints, `value` refers to the targeted node for that path.
 
+Type-local constraints can also live inside `schema.types` and are expanded
+onto each data path that uses that type hint:
+
+```yaml
+types:
+  EpisodeConfig:
+    type: object
+    properties:
+      initial_population_size:
+        type: integer
+        constraints:
+          - "value >= 1"
+          - "value <= max_agents"
+      max_agents:
+        type: integer
+        constraints: "value >= 1"
+    constraints:
+      - "initial_population_size <= max_agents"
+```
+
+Inside type-local constraints:
+
+- `value` still targets the current path.
+- bare names first resolve from root data, then local scope (`max_agents` above).
+
 ## Supported Schema Keywords (v0)
 
 The validator supports this subset:

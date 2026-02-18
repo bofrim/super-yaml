@@ -20,19 +20,26 @@ types:
     type: integer
     minimum: 1
     maximum: 65535
-constraints:
-  replicas:
-    - "value >= 1"
-  worker_threads:
-    - "value >= replicas"
-  http_port:
-    - "value > grpc_port"
+  Replicas:
+    type: integer
+    constraints:
+      - "value >= 1"
+  WorkerThreads:
+    type: integer
+    constraints:
+      - "value >= replicas"
+  HttpPort:
+    type: integer
+    minimum: 1
+    maximum: 65535
+    constraints:
+      - "value > grpc_port"
 
 ---data
 service_name <string>: billing
 region <string>: "${env.REGION}"
-replicas <integer>: 3
-worker_threads <integer>: "=max(replicas, env.CPU_CORES * 2)"
+replicas <Replicas>: 3
+worker_threads <WorkerThreads>: "=max(replicas, env.CPU_CORES * 2)"
 grpc_port <Port>: "${env.BASE_PORT}"
-http_port <Port>: "=grpc_port + 1"
+http_port <HttpPort>: "=grpc_port + 1"
 public_url <string>: "https://${region}.example.internal:${http_port}"

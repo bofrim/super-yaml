@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::json;
 
 use super_yaml::schema::{parse_schema, resolve_type_schema, validate_json_against_schema};
-use super_yaml::validate::{validate_constraints, validate_type_hints};
+use super_yaml::validate::{
+    build_effective_constraints, validate_constraints, validate_type_hints,
+};
 
 #[test]
 fn parse_schema_accepts_constraints_as_string_or_list() {
@@ -24,6 +26,72 @@ fn parse_schema_accepts_constraints_as_string_or_list() {
         &vec!["value >= 1".to_string()]
     );
     assert_eq!(schema.constraints.get("workers").unwrap().len(), 2);
+}
+
+#[test]
+fn parse_schema_collects_type_local_constraints() {
+    let raw = json!({
+        "types": {
+            "EpisodeConfig": {
+                "type": "object",
+                "properties": {
+                    "initial_population_size": {
+                        "type": "integer",
+                        "constraints": ["value >= 1", "value <= max_agents"]
+                    },
+                    "max_agents": {
+                        "type": "integer",
+                        "constraints": "value >= 1"
+                    }
+                },
+                "constraints": ["initial_population_size <= max_agents"]
+            }
+        }
+    });
+
+    let schema = parse_schema(&raw).unwrap();
+    let by_type = schema.type_constraints.get("EpisodeConfig").unwrap();
+    assert_eq!(
+        by_type.get("$.initial_population_size").unwrap(),
+        &vec!["value >= 1".to_string(), "value <= max_agents".to_string()]
+    );
+    assert_eq!(
+        by_type.get("$.max_agents").unwrap(),
+        &vec!["value >= 1".to_string()]
+    );
+    assert_eq!(
+        by_type.get("$").unwrap(),
+        &vec!["initial_population_size <= max_agents".to_string()]
+    );
+}
+
+#[test]
+fn parse_schema_collects_type_local_constraint_path_map() {
+    let raw = json!({
+        "types": {
+            "EpisodeConfig": {
+                "type": "object",
+                "constraints": {
+                    "initial_population_size": [
+                        "value >= 1",
+                        "value <= max_agents"
+                    ],
+                    "max_agents": "value >= 1"
+                }
+            }
+        }
+    });
+
+    let schema = parse_schema(&raw).unwrap();
+    let by_type = schema.type_constraints.get("EpisodeConfig").unwrap();
+    assert_eq!(
+        by_type.get("$.initial_population_size").unwrap(),
+        &vec!["value >= 1".to_string(), "value <= max_agents".to_string()]
+    );
+    assert_eq!(
+        by_type.get("$.max_agents").unwrap(),
+        &vec!["value >= 1".to_string()]
+    );
 }
 
 #[test]
@@ -216,6 +284,45 @@ fn validate_constraints_supports_paths_env_and_failures() {
 }
 
 #[test]
+fn build_effective_constraints_expands_type_local_paths() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "EpisodeConfig": {
+                "type": "object",
+                "properties": {
+                    "initial_population_size": {
+                        "type": "integer",
+                        "constraints": "value >= 1"
+                    }
+                },
+                "constraints": ["initial_population_size <= max_agents"]
+            }
+        },
+        "constraints": {
+            "global_limit": "value >= 1"
+        }
+    }))
+    .unwrap();
+
+    let mut hints = BTreeMap::new();
+    hints.insert("$.episode".to_string(), "EpisodeConfig".to_string());
+
+    let effective = build_effective_constraints(&hints, &schema);
+    assert_eq!(
+        effective.get("$.episode.initial_population_size").unwrap(),
+        &vec!["value >= 1".to_string()]
+    );
+    assert_eq!(
+        effective.get("$.episode").unwrap(),
+        &vec!["initial_population_size <= max_agents".to_string()]
+    );
+    assert_eq!(
+        effective.get("global_limit").unwrap(),
+        &vec!["value >= 1".to_string()]
+    );
+}
+
+#[test]
 fn validate_constraints_reports_unresolved_dependency() {
     let data = json!({"a": 1, "b": 2});
     let env = BTreeMap::new();
@@ -346,6 +453,28 @@ fn validate_constraints_can_use_nested_paths() {
     constraints.insert(
         "inventory.on_hand".to_string(),
         vec!["value >= inventory.reorder_point".to_string()],
+    );
+
+    validate_constraints(&data, &env, &constraints).unwrap();
+}
+
+#[test]
+fn validate_constraints_can_use_parent_scope_for_siblings() {
+    let data = json!({
+        "episode": {
+            "initial_population_size": 2,
+            "max_agents": 5
+        }
+    });
+    let env = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
+    constraints.insert(
+        "episode.initial_population_size".to_string(),
+        vec!["value <= max_agents".to_string()],
+    );
+    constraints.insert(
+        "episode".to_string(),
+        vec!["initial_population_size <= max_agents".to_string()],
     );
 
     validate_constraints(&data, &env, &constraints).unwrap();
@@ -520,6 +649,7 @@ fn parse_schema_accepts_empty_sections() {
     let schema = parse_schema(&json!({})).unwrap();
     assert!(schema.types.is_empty());
     assert!(schema.constraints.is_empty());
+    assert!(schema.type_constraints.is_empty());
 }
 
 #[test]
