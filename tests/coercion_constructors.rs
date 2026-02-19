@@ -108,7 +108,7 @@ fn constructor_reports_pattern_mismatch() {
 
 #[test]
 fn constructor_reports_decode_failure_with_field_context() {
-    let input = r##"
+    let input = r###"
 ---!syaml/v0
 ---schema
 Color:
@@ -119,7 +119,7 @@ Color:
     hex: { regex: '^#(?<raw>.{2})$', map: { red: { group: raw, decode: hex_u8 } } }
 ---data
 accent <Color>: "#GG"
-"##;
+"###;
 
     let err = compile_document(input, &env_provider(&[]))
         .unwrap_err()

@@ -1,21 +1,24 @@
 {
   "resource": {
     "cpu": 4,
-    "disk_count": 2,
-    "disks": [
-      {
-        "disk_kind": "ssd",
-        "mount_path": "/",
-        "name": "root",
-        "size_gb": 120
-      },
-      {
+    "disks": {
+      "data": {
         "disk_kind": "ssd",
         "mount_path": "/data",
-        "name": "data",
-        "size_gb": 512
+        "size": {
+          "amount": 512,
+          "unit": "GB"
+        }
+      },
+      "root": {
+        "disk_kind": "ssd",
+        "mount_path": "/",
+        "size": {
+          "amount": 120,
+          "unit": "GB"
+        }
       }
-    ],
+    },
     "image": "ubuntu-22.04",
     "memory": {
       "amount": 16,

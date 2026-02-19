@@ -225,3 +225,130 @@ service <RootService>:
     assert!(err.contains("shared.Missing"));
     assert!(err.contains("schema.RootService.properties.port.type"));
 }
+
+#[test]
+fn imports_allow_descendant_hint_with_direct_source_namespace_type() {
+    let dir = TempDir::new("imports_source_namespace_hint");
+
+    dir.write(
+        "a.syaml",
+        r#"
+---!syaml/v0
+---schema
+SchemaA:
+  type: integer
+  minimum: 1
+---data
+{}
+"#,
+    );
+
+    dir.write(
+        "b.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  a: ./a.syaml
+---schema
+SchemaB:
+  type: object
+  properties:
+    value:
+      type: a.SchemaA
+---data
+{}
+"#,
+    );
+
+    dir.write(
+        "c.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  a: ./a.syaml
+  b: ./b.syaml
+---schema
+{}
+---data
+item <b.SchemaB>:
+  value <a.SchemaA>: 7
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("c.syaml"));
+    assert_eq!(compiled["item"]["value"], json!(7));
+}
+
+#[test]
+fn imports_allow_descendant_hint_with_direct_source_namespace_for_nested_custom_type() {
+    let dir = TempDir::new("imports_source_namespace_nested_type");
+
+    dir.write(
+        "system_manifest.syaml",
+        r#"
+---!syaml/v0
+---schema
+ManifestParams:
+  type: object
+  properties:
+    mode: string
+SystemManifestEntry:
+  type: object
+  properties:
+    enabled: boolean
+    params: ManifestParams
+SystemManifestConfig:
+  type: object
+  values:
+    type: SystemManifestEntry
+---data
+{}
+"#,
+    );
+
+    dir.write(
+        "sim.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  system_manifest: ./system_manifest.syaml
+---schema
+WorldSystemsConfig:
+  type: object
+  properties:
+    manifest: system_manifest.SystemManifestConfig
+---data
+{}
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  sim: ./sim.syaml
+  system_manifest: ./system_manifest.syaml
+---schema
+{}
+---data
+systems <sim.WorldSystemsConfig>:
+  manifest <system_manifest.SystemManifestConfig>:
+    topology <system_manifest.SystemManifestEntry>:
+      enabled <boolean>: true
+      params <system_manifest.ManifestParams>:
+        mode <string>: active
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["systems"]["manifest"]["topology"]["enabled"], json!(true));
+    assert_eq!(
+        compiled["systems"]["manifest"]["topology"]["params"]["mode"],
+        json!("active")
+    );
+}

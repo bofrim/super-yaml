@@ -62,7 +62,9 @@ fn validate_nested_hint_matches_parent_schema(
         return Ok(());
     };
     let expected_type = schema_declared_type_name(&expected_schema, path)?;
-    if expected_type != type_name {
+    if expected_type != type_name
+        && !are_equivalent_type_names(schema, &expected_type, type_name)?
+    {
         return Err(SyamlError::TypeHintError(format!(
             "type hint mismatch at '{}': hint '{}' does not match schema-defined type '{}' under '{}'",
             path, type_name, expected_type, ancestor_path
@@ -70,6 +72,94 @@ fn validate_nested_hint_matches_parent_schema(
     }
 
     Ok(())
+}
+
+fn are_equivalent_type_names(
+    schema: &SchemaDoc,
+    expected_type: &str,
+    hinted_type: &str,
+) -> Result<bool, SyamlError> {
+    if expected_type == hinted_type {
+        return Ok(true);
+    }
+
+    if !is_namespaced_suffix_match(expected_type, hinted_type) {
+        return Ok(false);
+    }
+
+    let expected_schema = resolve_type_schema(schema, expected_type)?;
+    let hinted_schema = resolve_type_schema(schema, hinted_type)?;
+    Ok(
+        normalize_schema_type_references_for_comparison(schema, &expected_schema)
+            == normalize_schema_type_references_for_comparison(schema, &hinted_schema),
+    )
+}
+
+fn is_namespaced_suffix_match(left: &str, right: &str) -> bool {
+    let left_segments: Vec<&str> = left.split('.').collect();
+    let right_segments: Vec<&str> = right.split('.').collect();
+
+    if left_segments.len() == right_segments.len() {
+        return false;
+    }
+
+    let (longer, shorter) = if left_segments.len() > right_segments.len() {
+        (left_segments, right_segments)
+    } else {
+        (right_segments, left_segments)
+    };
+    longer[longer.len() - shorter.len()..] == shorter
+}
+
+fn normalize_schema_type_references_for_comparison(
+    schema: &SchemaDoc,
+    value: &JsonValue,
+) -> JsonValue {
+    match value {
+        JsonValue::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, child) in map {
+                if key == "type" {
+                    if let Some(type_name) = child.as_str() {
+                        if !is_builtin_type_name(type_name) {
+                            let canonical = canonicalize_imported_type_name(schema, type_name);
+                            out.insert(key.clone(), JsonValue::String(canonical));
+                            continue;
+                        }
+                    }
+                }
+                out.insert(
+                    key.clone(),
+                    normalize_schema_type_references_for_comparison(schema, child),
+                );
+            }
+            JsonValue::Object(out)
+        }
+        JsonValue::Array(items) => JsonValue::Array(
+            items
+                .iter()
+                .map(|item| normalize_schema_type_references_for_comparison(schema, item))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn canonicalize_imported_type_name(schema: &SchemaDoc, type_name: &str) -> String {
+    if is_builtin_type_name(type_name) {
+        return type_name.to_string();
+    }
+
+    let mut canonical = type_name.to_string();
+    while let Some((_, rest)) = canonical.split_once('.') {
+        if schema.types.contains_key(rest) {
+            canonical = rest.to_string();
+        } else {
+            break;
+        }
+    }
+
+    canonical
 }
 
 fn nearest_ancestor_hint<'a>(

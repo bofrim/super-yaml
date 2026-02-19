@@ -28,6 +28,8 @@ DiskSizeSpec:
   properties:
     amount: integer
     unit: DiskSizeUnit
+  constraints:
+    - amount >= 1
   constructors:
     from_text:
       regex: '^(?<amount>\d+)(?<raw_unit>[A-Za-z]+)$'
@@ -41,9 +43,10 @@ DiskSizeSpec:
 Disk:
   type: object
   properties:
-    size_gb: integer
+    size: DiskSizeSpec
     disk_kind: [ssd, hdd]
     mount_path: string?
+    
 
 VmNetwork:
   type: object
@@ -70,8 +73,6 @@ VmResource:
       type: object
       values: string
       optional: true
-  constraints:
-    - "memory.amount >= 1"
 
 ---data
 resource <VmResource>:
@@ -79,14 +80,14 @@ resource <VmResource>:
   image: ubuntu-22.04
   region: us-west-2
   cpu <CpuCount>: 4
-  memory <MemorySpec>: 16GiB
+  memory <MemorySpec>: 16MiB
   disks:
     root:
-      size_gb: 120
+      size <DiskSizeSpec>: 120GB
       disk_kind: ssd
       mount_path: /
     data:
-      size_gb: 512
+      size <DiskSizeSpec>: 512GB
       disk_kind: ssd
       mount_path: /data
   network:
