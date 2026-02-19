@@ -28,6 +28,8 @@ impl From<SyamlError> for EvalError {
 pub struct EvalContext<'a> {
     /// Root resolved/partially-resolved data tree.
     pub data: &'a JsonValue,
+    /// Imported namespace roots available for lookup (not necessarily emitted in output).
+    pub imports: &'a BTreeMap<String, JsonValue>,
     /// Resolved environment symbol map.
     pub env: &'a BTreeMap<String, JsonValue>,
     /// Paths still pending resolution (used for cycle/dependency handling).
@@ -98,6 +100,21 @@ fn resolve_var(path: &[String], ctx: &EvalContext<'_>) -> Result<JsonValue, Eval
                     path.join(".")
                 )))
             })
+        };
+    }
+
+    if let Some(import_root) = ctx.imports.get(&path[0]) {
+        return if path.len() == 1 {
+            Ok(import_root.clone())
+        } else {
+            lookup_path(import_root, &path[1..])
+                .cloned()
+                .ok_or_else(|| {
+                    EvalError::Fatal(SyamlError::ExpressionError(format!(
+                        "unknown reference '{}'",
+                        path.join(".")
+                    )))
+                })
         };
     }
 

@@ -14,6 +14,7 @@ use serde_json::Value as JsonValue;
 
 use crate::ast::SchemaDoc;
 use crate::error::SyamlError;
+use crate::expr::{parse_expression, parser::Expr};
 
 const MAX_SCHEMA_VALIDATION_DEPTH: usize = 64;
 
@@ -51,6 +52,7 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
     for (type_name, type_schema) in &types {
         let mut collected = BTreeMap::new();
         collect_type_constraints(type_schema, "$", type_name, &mut collected)?;
+        validate_type_constraint_variable_scope(type_name, type_schema, &collected, &types)?;
         if !collected.is_empty() {
             type_constraints.insert(type_name.clone(), collected);
         }
@@ -458,6 +460,179 @@ fn parse_constraint_expressions(
         _ => Err(SyamlError::SchemaError(format!(
             "{location} must be string or list of strings"
         ))),
+    }
+}
+
+fn validate_type_constraint_variable_scope(
+    type_name: &str,
+    type_schema: &JsonValue,
+    constraints: &BTreeMap<String, Vec<String>>,
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    for (constraint_path, expressions) in constraints {
+        let scope_schema =
+            resolve_schema_scope(type_schema, constraint_path, types).ok_or_else(|| {
+                SyamlError::SchemaError(format!(
+                    "constraint path '{}' under schema.{} does not resolve to a schema node",
+                    constraint_path, type_name
+                ))
+            })?;
+
+        for expression in expressions {
+            let source = expression.trim().trim_start_matches('=').trim();
+            let ast = parse_expression(source).map_err(|e| {
+                SyamlError::SchemaError(format!(
+                    "invalid constraint expression '{}' at schema.{} path '{}': {}",
+                    expression, type_name, constraint_path, e
+                ))
+            })?;
+            let mut var_paths = Vec::new();
+            collect_var_paths(&ast, &mut var_paths);
+
+            for var_path in var_paths {
+                let Some(first) = var_path.first() else {
+                    continue;
+                };
+                if first == "value" || first == "env" {
+                    continue;
+                }
+                if !is_schema_relative_path_valid(scope_schema, &var_path, types) {
+                    return Err(SyamlError::SchemaError(format!(
+                        "constraint '{}' at schema.{} path '{}' references '{}', which is outside the constrained type scope",
+                        expression,
+                        type_name,
+                        constraint_path,
+                        var_path.join(".")
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_var_paths(expr: &Expr, out: &mut Vec<Vec<String>>) {
+    match expr {
+        Expr::Var(path) => out.push(path.clone()),
+        Expr::Unary { expr, .. } => collect_var_paths(expr, out),
+        Expr::Binary { left, right, .. } => {
+            collect_var_paths(left, out);
+            collect_var_paths(right, out);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_var_paths(arg, out);
+            }
+        }
+        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Null => {}
+    }
+}
+
+fn resolve_schema_scope<'a>(
+    type_schema: &'a JsonValue,
+    constraint_path: &str,
+    types: &'a BTreeMap<String, JsonValue>,
+) -> Option<&'a JsonValue> {
+    let mut current = dereference_named_schema(type_schema, types)?;
+    for segment in parse_constraint_segments(constraint_path)? {
+        current = dereference_named_schema(current, types)?;
+        let obj = current.as_object()?;
+
+        if let Some(properties) = obj.get("properties").and_then(JsonValue::as_object) {
+            if let Some(next) = properties.get(&segment) {
+                current = next;
+                continue;
+            }
+        }
+
+        if let Some(values_schema) = obj.get("values") {
+            current = values_schema;
+            continue;
+        }
+
+        return None;
+    }
+
+    Some(current)
+}
+
+fn is_schema_relative_path_valid(
+    scope_schema: &JsonValue,
+    path: &[String],
+    types: &BTreeMap<String, JsonValue>,
+) -> bool {
+    let mut current = match dereference_named_schema(scope_schema, types) {
+        Some(node) => node,
+        None => return false,
+    };
+
+    for segment in path {
+        current = match dereference_named_schema(current, types) {
+            Some(node) => node,
+            None => return false,
+        };
+        let Some(obj) = current.as_object() else {
+            return false;
+        };
+
+        if let Some(properties) = obj.get("properties").and_then(JsonValue::as_object) {
+            if let Some(next) = properties.get(segment) {
+                current = next;
+                continue;
+            }
+        }
+
+        if let Some(values_schema) = obj.get("values") {
+            current = values_schema;
+            continue;
+        }
+
+        return false;
+    }
+
+    true
+}
+
+fn parse_constraint_segments(path: &str) -> Option<Vec<String>> {
+    let normalized = normalize_constraint_path(path);
+    if normalized == "$" {
+        return Some(Vec::new());
+    }
+    let remainder = normalized.strip_prefix("$.")?;
+    let mut out = Vec::new();
+    for segment in remainder.split('.') {
+        if segment.is_empty() {
+            return None;
+        }
+        out.push(segment.to_string());
+    }
+    Some(out)
+}
+
+fn dereference_named_schema<'a>(
+    mut node: &'a JsonValue,
+    types: &'a BTreeMap<String, JsonValue>,
+) -> Option<&'a JsonValue> {
+    let mut depth = 0usize;
+    loop {
+        if depth > MAX_SCHEMA_VALIDATION_DEPTH {
+            return None;
+        }
+        let Some(obj) = node.as_object() else {
+            return Some(node);
+        };
+        let Some(type_name) = obj.get("type").and_then(JsonValue::as_str) else {
+            return Some(node);
+        };
+        if is_builtin_type_name(type_name) {
+            return Some(node);
+        }
+        let Some(next) = types.get(type_name) else {
+            return None;
+        };
+        node = next;
+        depth += 1;
     }
 }
 

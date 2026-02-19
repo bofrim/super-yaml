@@ -35,6 +35,9 @@ pub enum SyamlError {
     /// Import parsing, resolution, or loading failure.
     #[error("import error: {0}")]
     ImportError(String),
+    /// Template expansion, variable binding, or template invocation failure.
+    #[error("template error: {0}")]
+    TemplateError(String),
     /// Output serialization failure.
     #[error("serialization error: {0}")]
     SerializationError(String),

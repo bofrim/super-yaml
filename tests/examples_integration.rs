@@ -33,6 +33,7 @@ fn all_examples_compile_to_expected_json() {
         "typed_dict",
         "color_constructors",
         "vm_resource",
+        "template_service",
     ];
 
     for case in cases {
@@ -62,6 +63,7 @@ fn all_examples_validate_successfully() {
         "typed_dict",
         "color_constructors",
         "vm_resource",
+        "template_service",
     ];
 
     for case in cases {

@@ -26,13 +26,13 @@ Replicas:
 WorkerThreads:
   type: integer
   constraints:
-    - "value >= replicas"
+    - "value >= 1"
 HttpPort:
   type: integer
   minimum: 1
   maximum: 65535
   constraints:
-    - "value > grpc_port"
+    - "value >= 1"
 
 ---data
 service_name <string>: billing

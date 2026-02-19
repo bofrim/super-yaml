@@ -16,7 +16,8 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:syaml"
+    "onLanguage:syaml",
+    "onCommand:syaml.previewExpandedOutput"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -47,6 +48,13 @@
         "language": "syaml",
         "scopeName": "source.syaml",
         "path": "./syntaxes/syaml.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "syaml.previewExpandedOutput",
+        "title": "SYAML: Preview Expanded Output",
+        "category": "SYAML"
       }
     ],
     "configuration": {

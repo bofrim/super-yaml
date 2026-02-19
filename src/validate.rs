@@ -62,8 +62,7 @@ fn validate_nested_hint_matches_parent_schema(
         return Ok(());
     };
     let expected_type = schema_declared_type_name(&expected_schema, path)?;
-    if expected_type != type_name
-        && !are_equivalent_type_names(schema, &expected_type, type_name)?
+    if expected_type != type_name && !are_equivalent_type_names(schema, &expected_type, type_name)?
     {
         return Err(SyamlError::TypeHintError(format!(
             "type hint mismatch at '{}': hint '{}' does not match schema-defined type '{}' under '{}'",
@@ -456,6 +455,17 @@ pub fn validate_constraints(
     env: &BTreeMap<String, JsonValue>,
     constraints: &BTreeMap<String, Vec<String>>,
 ) -> Result<(), SyamlError> {
+    let imports = BTreeMap::new();
+    validate_constraints_with_imports(data, env, constraints, &imports)
+}
+
+/// Evaluates schema constraints against data, environment, and imported namespaces.
+pub fn validate_constraints_with_imports(
+    data: &JsonValue,
+    env: &BTreeMap<String, JsonValue>,
+    constraints: &BTreeMap<String, Vec<String>>,
+    imports: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
     if constraints.len() > MAX_CONSTRAINT_PATHS {
         return Err(SyamlError::ConstraintError(format!(
             "too many constraint paths: {} (max {MAX_CONSTRAINT_PATHS})",
@@ -500,6 +510,7 @@ pub fn validate_constraints(
             let unresolved = HashSet::new();
             let ctx = EvalContext {
                 data,
+                imports,
                 env,
                 unresolved_paths: &unresolved,
                 current_value: Some(value),

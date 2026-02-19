@@ -1,0 +1,9 @@
+{
+  "service": {
+    "env": "prod",
+    "host": "api.internal",
+    "name": "api-service",
+    "port": 8080,
+    "tls": false
+  }
+}

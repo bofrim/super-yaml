@@ -1,0 +1,19 @@
+---!syaml/v0
+---schema
+Service:
+  type: object
+  properties:
+    name: string
+    host: string
+    port: integer
+    tls: boolean
+    env: [prod, staging, dev]
+
+---data
+templates:
+  service:
+    name: "{{NAME}}"
+    host: "{{HOST}}"
+    port: "{{PORT:8080}}"
+    tls: "{{TLS:false}}"
+    env: "{{ENV}}"

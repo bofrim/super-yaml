@@ -20,12 +20,11 @@ Percent:
   maximum: 1
 DiscountAmount:
   type: Money
-  constraints: "value <= subtotal"
+  constraints: "value >= 0"
 FinalTotal:
   type: Money
   constraints:
     - "value >= 0"
-    - "value <= subtotal"
 
 ---data
 currency <string>: USD

@@ -1,0 +1,15 @@
+---!syaml/v0
+---meta
+imports:
+  tpl: ./template_service_shared.syaml
+
+---schema
+{}
+
+---data
+service <tpl.Service>:
+  {{tpl.templates.service}}:
+    NAME: api-service
+    HOST: api.internal
+    ENV: prod
+

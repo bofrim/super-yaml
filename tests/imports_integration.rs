@@ -59,7 +59,7 @@ fn compile(path: &Path) -> serde_json::Value {
 }
 
 #[test]
-fn imports_expose_data_and_types_under_namespace_alias() {
+fn imports_expose_types_and_allow_namespaced_data_references_without_emitting_namespace() {
     let dir = TempDir::new("imports_namespace");
 
     dir.write(
@@ -95,7 +95,6 @@ RootService:
   properties:
     port:
       type: shared.Port
-      constraints: "value == shared.defaults.port"
 ---data
 port <shared.Port>: "${shared.defaults.port}"
 service <RootService>:
@@ -106,12 +105,12 @@ service <RootService>:
     let compiled = compile(&dir.file_path("root.syaml"));
     assert_eq!(compiled["port"], json!(8080));
     assert_eq!(compiled["service"]["port"], json!(8080));
-    assert_eq!(compiled["shared"]["defaults"]["port"], json!(8080));
+    assert!(compiled.get("shared").is_none());
 }
 
 #[test]
-fn import_alias_must_not_conflict_with_existing_data_key() {
-    let dir = TempDir::new("imports_data_conflict");
+fn import_alias_can_be_explicitly_extracted_into_output() {
+    let dir = TempDir::new("imports_data_extract");
 
     dir.write(
         "shared.syaml",
@@ -134,14 +133,47 @@ imports:
 ---schema
 {}
 ---data
-shared: already_here
+shared_copy: shared
 "#,
     );
 
-    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("conflicts with existing data key"));
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["shared_copy"]["value"], json!(1));
+}
+
+#[test]
+fn import_path_can_be_explicitly_extracted_into_output_value() {
+    let dir = TempDir::new("imports_path_extract");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+templates:
+  service:
+    host: "{{HOST}}"
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared: ./shared.syaml
+---schema
+{}
+---data
+some_key: shared.templates.service
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["some_key"]["host"], json!("{{HOST}}"));
 }
 
 #[test]
@@ -282,6 +314,92 @@ item <b.SchemaB>:
 }
 
 #[test]
+fn private_top_level_data_keys_are_local_only_and_not_emitted() {
+    let dir = TempDir::new("private_data_local");
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+_defaults:
+  port: 8080
+_templates:
+  service:
+    host: "{{HOST:localhost}}"
+    port: "{{PORT}}"
+service:
+  "{{_templates.service}}":
+    PORT: "${_defaults.port}"
+public_port: "${_defaults.port}"
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["service"]["host"], json!("localhost"));
+    assert_eq!(compiled["service"]["port"], json!(8080));
+    assert_eq!(compiled["public_port"], json!(8080));
+    assert!(compiled.get("_defaults").is_none());
+    assert!(compiled.get("_templates").is_none());
+}
+
+#[test]
+fn imported_documents_do_not_expose_private_top_level_data_keys() {
+    let dir = TempDir::new("private_data_imports");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+_secret:
+  base: 41
+public_answer: "=_secret.base + 1"
+"#,
+    );
+
+    dir.write(
+        "ok.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared: ./shared.syaml
+---schema
+{}
+---data
+answer: "${shared.public_answer}"
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("ok.syaml"));
+    assert_eq!(compiled["answer"], json!(42));
+
+    dir.write(
+        "leak.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared: ./shared.syaml
+---schema
+{}
+---data
+attempt: "${shared._secret.base}"
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("leak.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("unknown reference 'shared._secret.base'"));
+}
+
+#[test]
 fn imports_allow_descendant_hint_with_direct_source_namespace_for_nested_custom_type() {
     let dir = TempDir::new("imports_source_namespace_nested_type");
 
@@ -346,9 +464,199 @@ systems <sim.WorldSystemsConfig>:
     );
 
     let compiled = compile(&dir.file_path("root.syaml"));
-    assert_eq!(compiled["systems"]["manifest"]["topology"]["enabled"], json!(true));
+    assert_eq!(
+        compiled["systems"]["manifest"]["topology"]["enabled"],
+        json!(true)
+    );
     assert_eq!(
         compiled["systems"]["manifest"]["topology"]["params"]["mode"],
         json!("active")
     );
+}
+
+#[test]
+fn imports_expand_template_invocation_with_defaults() {
+    let dir = TempDir::new("imports_template_success");
+
+    dir.write(
+        "tpl.syaml",
+        r#"
+---!syaml/v0
+---schema
+Service:
+  type: object
+  properties:
+    name: string
+    host: string
+    port: integer
+    tls: boolean
+    env: [prod, staging, dev]
+---data
+templates:
+  service:
+    name: "{{NAME}}"
+    host: "{{HOST}}"
+    port: "{{PORT:8080}}"
+    tls: "{{TLS:false}}"
+    env: "{{ENV}}"
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  tpl: ./tpl.syaml
+---schema
+{}
+---data
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    NAME: api-service
+    HOST: api.internal
+    ENV: prod
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["service"]["name"], json!("api-service"));
+    assert_eq!(compiled["service"]["host"], json!("api.internal"));
+    assert_eq!(compiled["service"]["port"], json!(8080));
+    assert_eq!(compiled["service"]["tls"], json!(false));
+    assert_eq!(compiled["service"]["env"], json!("prod"));
+}
+
+#[test]
+fn imports_template_invocation_rejects_missing_required_variable() {
+    let dir = TempDir::new("imports_template_missing_var");
+
+    dir.write(
+        "tpl.syaml",
+        r#"
+---!syaml/v0
+---schema
+Service:
+  type: object
+  properties:
+    host: string
+    env: [prod, staging, dev]
+---data
+templates:
+  service:
+    host: "{{HOST}}"
+    env: "{{ENV}}"
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  tpl: ./tpl.syaml
+---schema
+{}
+---data
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    HOST: api.internal
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("missing required template variable 'ENV'"));
+}
+
+#[test]
+fn imports_template_invocation_rejects_unexpected_variable() {
+    let dir = TempDir::new("imports_template_unexpected_var");
+
+    dir.write(
+        "tpl.syaml",
+        r#"
+---!syaml/v0
+---schema
+Service:
+  type: object
+  properties:
+    host: string
+---data
+templates:
+  service:
+    host: "{{HOST}}"
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  tpl: ./tpl.syaml
+---schema
+{}
+---data
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    HOST: api.internal
+    EXTRA: nope
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("unexpected template variable 'EXTRA'"));
+}
+
+#[test]
+fn imports_template_invocation_values_are_validated_against_schema() {
+    let dir = TempDir::new("imports_template_type_validation");
+
+    dir.write(
+        "tpl.syaml",
+        r#"
+---!syaml/v0
+---schema
+Service:
+  type: object
+  properties:
+    host: string
+    port: integer
+---data
+templates:
+  service:
+    host: "{{HOST}}"
+    port: "{{PORT:8080}}"
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  tpl: ./tpl.syaml
+---schema
+{}
+---data
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    HOST: api.internal
+    PORT: "443"
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("expected integer"));
+    assert!(err.contains("$.service.port"));
 }

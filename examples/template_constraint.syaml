@@ -1,0 +1,36 @@
+---!syaml/v0
+---schema
+SeatLimit:
+  type: integer
+  minimum: 1
+
+RequestedSeats:
+  type: integer
+  minimum: 1
+
+Booking:
+  type: object
+  properties:
+    name: string
+    seat_limit: SeatLimit
+    requested_seats: RequestedSeats
+  constraints:
+    - "requested_seats <= seat_limit"
+
+---data
+_templates:
+  booking:
+    name: "{{NAME}}"
+    seat_limit: 100
+    requested_seats: "{{REQUESTED_SEATS}}"
+
+
+strict_booking <Booking>:
+  {{_templates.booking}}:
+    NAME: Aurora Book Club
+    REQUESTED_SEATS: 3
+
+flex_booking <Booking>:
+  {{_templates.booking}}:
+    NAME: Harbor Tech Meetup
+    REQUESTED_SEATS: 20

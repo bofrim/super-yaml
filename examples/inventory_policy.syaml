@@ -12,13 +12,30 @@ PositiveInt:
   minimum: 1
 InventoryConfig:
   type: object
+  properties:
+    sku:
+      type: string
+    on_hand:
+      type: PositiveInt
+    reorder_point:
+      type: PositiveInt
+    daily_demand:
+      type: number
+    target_stock:
+      type: PositiveInt
+    lead_days:
+      type: PositiveInt
+    status:
+      type: string
+    notes:
+      type: string
   constraints:
     reorder_point:
       - "value >= 1"
-    target_stock:
-      - "value >= reorder_point"
     lead_days:
       - "value <= 30"
+    $:
+      - "target_stock >= reorder_point"
 
 ---data
 store_code <string>: "${env.STORE_CODE}"

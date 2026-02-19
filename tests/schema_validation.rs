@@ -31,7 +31,7 @@ fn parse_schema_collects_type_local_constraints() {
                 "properties": {
                     "initial_population_size": {
                         "type": "integer",
-                        "constraints": ["value >= 1", "value <= max_agents"]
+                        "constraints": ["value >= 1", "value <= 1000000"]
                     },
                     "max_agents": {
                         "type": "integer",
@@ -47,7 +47,7 @@ fn parse_schema_collects_type_local_constraints() {
     let by_type = schema.type_constraints.get("EpisodeConfig").unwrap();
     assert_eq!(
         by_type.get("$.initial_population_size").unwrap(),
-        &vec!["value >= 1".to_string(), "value <= max_agents".to_string()]
+        &vec!["value >= 1".to_string(), "value <= 1000000".to_string()]
     );
     assert_eq!(
         by_type.get("$.max_agents").unwrap(),
@@ -65,10 +65,14 @@ fn parse_schema_collects_type_local_constraint_path_map() {
         "types": {
             "EpisodeConfig": {
                 "type": "object",
+                "properties": {
+                    "initial_population_size": { "type": "integer" },
+                    "max_agents": { "type": "integer" }
+                },
                 "constraints": {
                     "initial_population_size": [
                         "value >= 1",
-                        "value <= max_agents"
+                        "value <= 1000000"
                     ],
                     "max_agents": "value >= 1"
                 }
@@ -80,7 +84,7 @@ fn parse_schema_collects_type_local_constraint_path_map() {
     let by_type = schema.type_constraints.get("EpisodeConfig").unwrap();
     assert_eq!(
         by_type.get("$.initial_population_size").unwrap(),
-        &vec!["value >= 1".to_string(), "value <= max_agents".to_string()]
+        &vec!["value >= 1".to_string(), "value <= 1000000".to_string()]
     );
     assert_eq!(
         by_type.get("$.max_agents").unwrap(),
@@ -252,6 +256,24 @@ fn parse_schema_rejects_non_string_constraint_entries() {
 
     let err = parse_schema(&raw).unwrap_err();
     assert!(err.to_string().contains("entries must be strings"));
+}
+
+#[test]
+fn parse_schema_rejects_constraint_reference_outside_type_scope() {
+    let raw = json!({
+        "types": {
+            "RequestedSeats": {
+                "type": "integer",
+                "constraints": ["value <= seat_limit"]
+            }
+        }
+    });
+
+    let err = parse_schema(&raw).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("outside the constrained type scope"));
+    assert!(err.to_string().contains("seat_limit"));
 }
 
 #[test]
@@ -557,6 +579,9 @@ fn build_effective_constraints_expands_type_local_paths() {
                     "initial_population_size": {
                         "type": "integer",
                         "constraints": "value >= 1"
+                    },
+                    "max_agents": {
+                        "type": "integer"
                     }
                 },
                 "constraints": ["initial_population_size <= max_agents"]

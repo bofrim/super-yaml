@@ -13,8 +13,10 @@ fn eval_with(
     current_value: Option<&JsonValue>,
 ) -> Result<JsonValue, EvalError> {
     let expr = parse_expression(expr_src).unwrap();
+    let imports = BTreeMap::new();
     let ctx = EvalContext {
         data,
+        imports: &imports,
         env,
         unresolved_paths: unresolved,
         current_value,

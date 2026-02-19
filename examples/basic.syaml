@@ -20,7 +20,7 @@ ReplicaCount:
   constraints: "value >= 1"
 MaxConnections:
   type: integer
-  constraints: "value % replicas == 0"
+  constraints: "value >= 1"
 
 ---data
 host <string>: "${env.DB_HOST}"

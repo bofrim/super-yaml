@@ -1,0 +1,10 @@
+---!syaml/v0
+---schema
+{}
+
+---data
+templates:
+  booking:
+    name: "{{NAME}}"
+    seat_limit: "{{SEAT_LIMIT}}"
+    requested_seats: "{{REQUESTED_SEATS}}"

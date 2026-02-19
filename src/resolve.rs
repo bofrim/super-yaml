@@ -104,6 +104,17 @@ pub fn resolve_expressions(
     data: &mut JsonValue,
     env: &BTreeMap<String, JsonValue>,
 ) -> Result<(), SyamlError> {
+    let imports = BTreeMap::new();
+    resolve_expressions_with_imports(data, env, &imports)
+}
+
+/// Resolves derived expressions/interpolations with imported namespaces available
+/// to expression references (for example `shared.defaults.port`).
+pub fn resolve_expressions_with_imports(
+    data: &mut JsonValue,
+    env: &BTreeMap<String, JsonValue>,
+    imports: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
     let mut expr_nodes = Vec::new();
     collect_expression_nodes(data, "$", &mut expr_nodes);
 
@@ -132,7 +143,7 @@ pub fn resolve_expressions(
                 continue;
             }
 
-            match eval_node(node, data, env, &unresolved) {
+            match eval_node(node, data, env, imports, &unresolved) {
                 Ok(value) => {
                     set_json_path(data, &node.path, value)?;
                     unresolved.remove(&node.path);
@@ -195,6 +206,7 @@ fn eval_node(
     node: &ExpressionNode,
     data: &JsonValue,
     env: &BTreeMap<String, JsonValue>,
+    imports: &BTreeMap<String, JsonValue>,
     unresolved: &HashSet<String>,
 ) -> Result<JsonValue, EvalError> {
     let raw = node.raw.trim();
@@ -204,6 +216,7 @@ fn eval_node(
         let parsed = parse_expression(source)?;
         let ctx = EvalContext {
             data,
+            imports,
             env,
             unresolved_paths: unresolved,
             current_value: None,
@@ -212,13 +225,14 @@ fn eval_node(
         return evaluate(&parsed, &ctx);
     }
 
-    evaluate_interpolation(raw, data, env, unresolved)
+    evaluate_interpolation(raw, data, env, imports, unresolved)
 }
 
 fn evaluate_interpolation(
     raw: &str,
     data: &JsonValue,
     env: &BTreeMap<String, JsonValue>,
+    imports: &BTreeMap<String, JsonValue>,
     unresolved: &HashSet<String>,
 ) -> Result<JsonValue, EvalError> {
     let all_re = interpolation_regex();
@@ -249,6 +263,7 @@ fn evaluate_interpolation(
         let parsed = parse_expression(source)?;
         let ctx = EvalContext {
             data,
+            imports,
             env,
             unresolved_paths: unresolved,
             current_value: None,
@@ -267,6 +282,7 @@ fn evaluate_interpolation(
         let parsed = parse_expression(source)?;
         let ctx = EvalContext {
             data,
+            imports,
             env,
             unresolved_paths: unresolved,
             current_value: None,

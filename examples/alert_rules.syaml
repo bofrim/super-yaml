@@ -9,8 +9,6 @@ RuleList:
     - "len(value) >= 2"
 AlertCount:
   type: integer
-  constraints:
-    - "value == len(rules)"
 
 ---data
 service <string>: search

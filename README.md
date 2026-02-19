@@ -7,6 +7,7 @@ It combines:
 - a predictable file structure (`marker + sections`)
 - schema-backed validation
 - inline type hints on keys
+- data templates with strict variable binding
 - derived values via expressions
 - external configuration through environment bindings
 
@@ -109,7 +110,7 @@ ReplicaCount:
   constraints: "value >= 1"
 MaxConnections:
   type: integer
-  constraints: "value % replicas == 0"
+  constraints: "value >= 1"
 
 ---data
 host <string>: "${env.DB_HOST}"
@@ -172,10 +173,45 @@ Rules:
 
 Behavior:
 
-- imported data is mounted under `data.<alias>`.
 - imported schema types are mounted under `<alias.TypeName>`.
+- imported data is available for references (templates, expressions, constraints) but is not emitted unless explicitly extracted in `data`.
+- imported documents do not expose top-level private data keys (those prefixed with `_`).
 - imported files run their own env/expression/type/constraint pipeline.
 - cyclic imports are rejected.
+
+Explicit extraction examples:
+
+```yaml
+shared_copy: shared
+service_template_copy: shared.templates.service
+```
+
+## Data Templates
+
+Template placeholders can be used inside normal data objects:
+
+- `{{VAR}}` required variable
+- `{{VAR:default}}` optional variable with default scalar
+
+Template invocation uses a template reference as an object key:
+
+```yaml
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    NAME: api-service
+    HOST: api.internal
+    ENV: prod
+```
+
+Rules:
+
+- template invocation key must be the only key in that object
+- invocation value must be a mapping of template variables
+- all required template variables must be provided
+- unknown variables are rejected
+- resolved values are validated against schema/type hints
+
+See `/examples/template_service.syaml` and `/examples/template_service_shared.syaml`.
 
 ## `schema` Section
 
@@ -273,7 +309,7 @@ EpisodeConfig:
       type: integer
       constraints:
         - "value >= 1"
-        - "value <= max_agents"
+        - "value <= 1000000"
     max_agents:
       type: integer
       constraints: "value >= 1"
@@ -284,7 +320,9 @@ EpisodeConfig:
 Inside type-local constraints:
 
 - `value` still targets the current path.
-- bare names first resolve from root data, then local scope (`max_agents` above).
+- bare names must resolve within the constrained type scope.
+  On primitive-constrained paths, use `value` for self-reference and place
+  cross-field comparisons on the enclosing object type (as shown above).
 
 ## Supported Schema Keywords (v0)
 
@@ -384,6 +422,7 @@ Normalization behavior:
 - key is rewritten to canonical name (`port`, `replicas`)
 - hint is stored at JSON path (`$.port`, `$.replicas`)
 - duplicate canonical keys are rejected
+- top-level keys prefixed with `_` are private: available within the same file during template/expression resolution, but removed from final output and unavailable to importing files
 
 ## Expressions
 
@@ -532,11 +571,13 @@ let env = MapEnvProvider::new(vars);
 1. scan marker + sections
 2. parse section bodies
 3. parse schema and normalize data/type hints
-4. resolve env bindings
-5. resolve expressions/interpolations
-6. coerce hinted string values through object constructors
-7. validate type hints against schema
-8. validate constraints
+4. extract explicit import references from data values
+5. expand templates
+6. resolve env bindings
+7. resolve expressions/interpolations
+8. coerce hinted string values through object constructors
+9. validate type hints against schema
+10. validate constraints
 
 If any step fails, compilation stops with a `SyamlError`.
 
@@ -553,6 +594,8 @@ The library uses `SyamlError` variants to indicate where failures occurred:
 - `ConstraintError`
 - `EnvError`
 - `CycleError`
+- `ImportError`
+- `TemplateError`
 - `SerializationError`
 - `Io`
 
@@ -568,6 +611,7 @@ The repository ships with sample `.syaml` inputs and expected JSON outputs:
 - `examples/type_composition.syaml`
 - `examples/color_constructors.syaml`
 - `examples/vm_resource.syaml`
+- `examples/template_service.syaml`
 
 Each has a matching `examples/*.expected.json`.
 

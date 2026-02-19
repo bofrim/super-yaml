@@ -41,8 +41,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const typeDefinitionProvider = new SyamlTypeDefinitionProvider();
   const typeReferenceProvider = new SyamlTypeReferenceProvider();
   const inlayHintsProvider = new SyamlInlayHintsProvider();
+  const previewProvider = new SyamlPreviewContentProvider();
 
   context.subscriptions.push(diagnostics);
+  context.subscriptions.push(previewProvider);
   context.subscriptions.push(
     vscode.languages.registerDocumentSemanticTokensProvider(
       { language: "syaml" },
@@ -67,6 +69,24 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: "syaml" },
       inlayHintsProvider
     )
+  );
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      "syaml-preview",
+      previewProvider
+    )
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("syaml.previewExpandedOutput", async () => {
+      const document = vscode.window.activeTextEditor?.document;
+      if (!document || !isSyamlDocument(document)) {
+        void vscode.window.showInformationMessage(
+          "Open a .syaml document to preview expanded output."
+        );
+        return;
+      }
+      await previewExpandedOutput(document, context.extensionPath, previewProvider);
+    })
   );
 
   context.subscriptions.push(
@@ -100,6 +120,29 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {}
+
+class SyamlPreviewContentProvider implements vscode.TextDocumentContentProvider {
+  private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
+  private readonly contentByUri = new Map<string, string>();
+  readonly onDidChange = this.emitter.event;
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return (
+      this.contentByUri.get(uri.toString()) ??
+      "# No preview content available.\n"
+    );
+  }
+
+  setContent(uri: vscode.Uri, content: string): void {
+    this.contentByUri.set(uri.toString(), content);
+    this.emitter.fire(uri);
+  }
+
+  dispose(): void {
+    this.contentByUri.clear();
+    this.emitter.dispose();
+  }
+}
 
 class SyamlValidator {
   private readonly timers = new Map<string, NodeJS.Timeout>();
@@ -1794,6 +1837,63 @@ function isSyamlDocument(document: vscode.TextDocument): boolean {
     return false;
   }
   return document.uri.fsPath.endsWith(".syaml");
+}
+
+async function previewExpandedOutput(
+  document: vscode.TextDocument,
+  extensionPath: string,
+  previewProvider: SyamlPreviewContentProvider
+): Promise<void> {
+  let parser: ParserCommand;
+  try {
+    parser = await resolveParserCommand(document, extensionPath);
+  } catch {
+    void vscode.window.showErrorMessage(
+      "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+    );
+    return;
+  }
+
+  const result = await withInputFile(document, async (inputPath) => {
+    const args = [...parser.argPrefix, "compile", inputPath, "--format", "yaml"];
+    try {
+      const output = await execFileAsync(parser.command, args, {
+        cwd: parser.cwd,
+        timeout: 15000,
+        maxBuffer: 4 * 1024 * 1024
+      });
+      return { ok: true as const, content: output.stdout.toString() };
+    } catch (error) {
+      const execError = error as ExecError;
+      if (execError.code === "ENOENT") {
+        return {
+          ok: false as const,
+          message:
+            "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+        };
+      }
+      const output = normalizeExecOutput(execError);
+      return { ok: false as const, message: extractDiagnosticMessage(output) };
+    }
+  });
+
+  if (!result.ok) {
+    void vscode.window.showErrorMessage(`SYAML preview failed: ${result.message}`);
+    return;
+  }
+
+  const key = encodeURIComponent(document.uri.toString());
+  const previewUri = vscode.Uri.parse(`syaml-preview:/${key}.yaml`);
+  const content = result.content.endsWith("\n")
+    ? result.content
+    : `${result.content}\n`;
+  previewProvider.setContent(previewUri, content);
+
+  const previewDocument = await vscode.workspace.openTextDocument(previewUri);
+  await vscode.window.showTextDocument(previewDocument, {
+    preview: true,
+    viewColumn: vscode.ViewColumn.Beside
+  });
 }
 
 async function resolveParserCommand(

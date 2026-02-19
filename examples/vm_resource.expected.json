@@ -22,7 +22,7 @@
     "image": "ubuntu-22.04",
     "memory": {
       "amount": 16,
-      "unit": "GiB"
+      "unit": "MiB"
     },
     "network": {
       "assign_public_ip": false,

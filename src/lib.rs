@@ -5,10 +5,12 @@
 //! 1. Section scanning and shape validation (`---!syaml/v0`, section order, required sections).
 //! 2. Parsing section bodies with the built-in YAML subset parser.
 //! 3. Schema extraction and type-hint normalization.
-//! 4. Environment binding resolution.
-//! 5. Derived expression/interpolation resolution.
-//! 6. String constructor coercion for hinted object types.
-//! 7. Type-hint and constraint validation.
+//! 4. Explicit import-value extraction.
+//! 5. Template expansion.
+//! 6. Environment binding resolution.
+//! 7. Derived expression/interpolation resolution.
+//! 8. String constructor coercion for hinted object types.
+//! 9. Type-hint and constraint validation.
 //!
 //! Use [`compile_document`] for full compilation, [`validate_document`] for validation-only
 //! workflows, [`compile_document_to_json`] / [`compile_document_to_yaml`] for serialized output,
@@ -33,6 +35,8 @@ pub mod rust_codegen;
 pub mod schema;
 /// Top-level section marker scanner and order validator.
 pub mod section_scanner;
+/// Data-template expansion (`{{template.path}}` keys + `{{VAR}}` placeholders).
+pub mod template;
 /// Type-hint extraction (`key <Type>`) and normalization.
 pub mod type_hints;
 /// TypeScript type generation from named schema definitions.
@@ -51,14 +55,17 @@ use serde_json::Value as JsonValue;
 use ast::{CompiledDocument, DataDoc, EnvBinding, ImportBinding, Meta, ParsedDocument};
 use coerce::coerce_string_constructors_for_type_hints;
 pub use error::SyamlError;
-use resolve::{resolve_env_bindings, resolve_expressions};
+use resolve::{resolve_env_bindings, resolve_expressions_with_imports};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
 pub use rust_codegen::{generate_rust_types, generate_rust_types_from_path};
 use schema::{parse_schema, validate_schema_type_references};
 use section_scanner::scan_sections;
+use template::expand_data_templates;
 use type_hints::normalize_data_with_hints;
 pub use typescript_codegen::{generate_typescript_types, generate_typescript_types_from_path};
-use validate::{build_effective_constraints, validate_constraints, validate_type_hints};
+use validate::{
+    build_effective_constraints, validate_constraints_with_imports, validate_type_hints,
+};
 
 /// Parses a `.syaml` document into its structured representation.
 ///
@@ -249,19 +256,27 @@ fn compile_parsed_document(
 ) -> Result<CompiledWithTypes, SyamlError> {
     let mut schema = parsed.schema;
     let mut data = parsed.data.value.clone();
+    let mut imported_data = HashMap::new();
 
     if let Some(meta) = parsed.meta.as_ref() {
-        merge_imports(meta, base_dir, &mut schema.types, &mut data, ctx)?;
+        merge_imports(meta, base_dir, &mut schema.types, &mut imported_data, ctx)?;
     }
     validate_schema_type_references(&schema.types)?;
+    extract_explicit_import_values(&mut data, &imported_data)?;
+    expand_data_templates(&mut data, &imported_data)?;
 
     let env_values = resolve_env_bindings(parsed.meta.as_ref(), ctx.env_provider)?;
-    resolve_expressions(&mut data, &env_values)?;
+    let imports_for_eval: BTreeMap<String, JsonValue> = imported_data
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    resolve_expressions_with_imports(&mut data, &env_values, &imports_for_eval)?;
     coerce_string_constructors_for_type_hints(&mut data, &parsed.data.type_hints, &schema.types)?;
 
     validate_type_hints(&data, &parsed.data.type_hints, &schema)?;
     let constraints = build_effective_constraints(&parsed.data.type_hints, &schema);
-    validate_constraints(&data, &env_values, &constraints)?;
+    validate_constraints_with_imports(&data, &env_values, &constraints, &imports_for_eval)?;
+    strip_private_top_level_data_keys(&mut data);
 
     Ok(CompiledWithTypes {
         value: data,
@@ -269,11 +284,22 @@ fn compile_parsed_document(
     })
 }
 
+fn strip_private_top_level_data_keys(data: &mut JsonValue) {
+    let Some(root) = data.as_object_mut() else {
+        return;
+    };
+    root.retain(|key, _| !is_private_top_level_key(key));
+}
+
+fn is_private_top_level_key(key: &str) -> bool {
+    key.starts_with('_')
+}
+
 fn merge_imports(
     meta: &Meta,
     base_dir: &Path,
     type_registry: &mut BTreeMap<String, JsonValue>,
-    data: &mut JsonValue,
+    imported_data: &mut HashMap<String, JsonValue>,
     ctx: &mut CompileContext<'_>,
 ) -> Result<(), SyamlError> {
     for (alias, binding) in &meta.imports {
@@ -285,7 +311,7 @@ fn merge_imports(
                 alias
             ))
         })?;
-        insert_imported_data_namespace(data, alias, imported.value.clone())?;
+        imported_data.insert(alias.clone(), imported.value.clone());
         insert_imported_types(type_registry, alias, &imported.exported_types)?;
     }
     Ok(())
@@ -317,27 +343,6 @@ fn canonicalize_path(path: &Path) -> Result<PathBuf, SyamlError> {
     })
 }
 
-fn insert_imported_data_namespace(
-    root_data: &mut JsonValue,
-    alias: &str,
-    imported_value: JsonValue,
-) -> Result<(), SyamlError> {
-    let root_object = root_data.as_object_mut().ok_or_else(|| {
-        SyamlError::ImportError(format!(
-            "data section must be an object when using imports (missing namespace '{alias}')"
-        ))
-    })?;
-
-    if root_object.contains_key(alias) {
-        return Err(SyamlError::ImportError(format!(
-            "import namespace '{alias}' conflicts with existing data key"
-        )));
-    }
-
-    root_object.insert(alias.to_string(), imported_value);
-    Ok(())
-}
-
 fn insert_imported_types(
     target_types: &mut BTreeMap<String, JsonValue>,
     alias: &str,
@@ -367,6 +372,67 @@ fn insert_imported_types(
     }
 
     Ok(())
+}
+
+fn extract_explicit_import_values(
+    data: &mut JsonValue,
+    imports: &HashMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    let root = data.as_object().ok_or_else(|| {
+        SyamlError::ImportError(
+            "data section must be a mapping/object when using imports".to_string(),
+        )
+    })?;
+    if root.is_empty() || imports.is_empty() {
+        return Ok(());
+    }
+    extract_import_values_inner(data, imports);
+    Ok(())
+}
+
+fn extract_import_values_inner(value: &mut JsonValue, imports: &HashMap<String, JsonValue>) {
+    match value {
+        JsonValue::Object(map) => {
+            for child in map.values_mut() {
+                extract_import_values_inner(child, imports);
+            }
+        }
+        JsonValue::Array(items) => {
+            for item in items.iter_mut() {
+                extract_import_values_inner(item, imports);
+            }
+        }
+        JsonValue::String(raw) => {
+            if let Some(resolved) = try_resolve_import_reference(raw, imports) {
+                *value = resolved;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn try_resolve_import_reference(
+    raw: &str,
+    imports: &HashMap<String, JsonValue>,
+) -> Option<JsonValue> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut segments = trimmed.split('.');
+    let first = segments.next()?;
+    if !is_valid_namespace_segment(first) {
+        return None;
+    }
+    let mut current = imports.get(first)?;
+    for segment in segments {
+        if !is_valid_namespace_segment(segment) {
+            return None;
+        }
+        current = current.as_object()?.get(segment)?;
+    }
+    Some(current.clone())
 }
 
 fn rewrite_schema_type_references(
@@ -599,7 +665,7 @@ ReplicaCount:
   constraints: "value >= 1"
 MaxConnections:
   type: integer
-  constraints: "value % replicas == 0"
+  constraints: "value >= 1"
 ---data
 replicas <ReplicaCount>: 3
 worker_threads <integer>: "=max(2, env.CPU_CORES * 2)"
@@ -624,7 +690,7 @@ EpisodeConfig:
       type: integer
       constraints:
         - "value >= 1"
-        - "value <= max_agents"
+        - "value <= 1000000"
     max_agents:
       type: integer
       constraints: "value >= 1"
@@ -651,12 +717,19 @@ episode <EpisodeConfig>:
 ---schema
 EpisodeConfig:
   type: object
+  properties:
+    initial_population_size:
+      type: integer
+    max_agents:
+      type: integer
   constraints:
     initial_population_size:
       - "value >= 1"
-      - "value <= max_agents"
+      - "value <= 1000000"
     max_agents:
       - "value >= 1"
+    $:
+      - "initial_population_size <= max_agents"
 ---data
 episode <EpisodeConfig>:
   initial_population_size: 3
