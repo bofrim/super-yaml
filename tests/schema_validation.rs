@@ -143,6 +143,32 @@ fn parse_schema_normalizes_string_type_shorthand_for_nested_nodes() {
 }
 
 #[test]
+fn parse_schema_normalizes_string_type_shorthand_for_object_values() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "ServiceInstances": {
+                "type": "object",
+                "values": "integer"
+            }
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        schema.types["ServiceInstances"]["values"]["type"],
+        json!("integer")
+    );
+
+    validate_json_against_schema_with_types(
+        &json!({"api": 3, "worker": 5}),
+        schema.types.get("ServiceInstances").unwrap(),
+        "$.instances",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
 fn parse_schema_normalizes_string_enum_shorthand_for_nested_nodes() {
     let schema = parse_schema(&json!({
         "types": {
@@ -162,7 +188,14 @@ fn parse_schema_normalizes_string_enum_shorthand_for_nested_nodes() {
     );
     assert_eq!(
         schema.types["DerivedMetricSpec"]["properties"]["operator"]["enum"],
-        json!(["ema", "derivative", "rolling_mean", "rolling_var", "rolling_min", "rolling_max"])
+        json!([
+            "ema",
+            "derivative",
+            "rolling_mean",
+            "rolling_var",
+            "rolling_min",
+            "rolling_max"
+        ])
     );
 
     validate_json_against_schema_with_types(
@@ -931,6 +964,86 @@ fn validate_json_against_schema_rejects_invalid_optional_shape() {
 
     assert!(err.to_string().contains("optional"));
     assert!(err.to_string().contains("must be a boolean"));
+}
+
+#[test]
+fn validate_json_against_schema_validates_object_values_schema() {
+    let schema = json!({
+        "type": "object",
+        "values": {
+            "type": "object",
+            "properties": {
+                "cpu": { "type": "integer", "minimum": 1 }
+            }
+        }
+    });
+
+    validate_json_against_schema(
+        &json!({
+            "api": { "cpu": 2 },
+            "worker": { "cpu": 4 }
+        }),
+        &schema,
+        "$.services",
+    )
+    .unwrap();
+
+    let err = validate_json_against_schema(
+        &json!({
+            "api": { "cpu": 0 }
+        }),
+        &schema,
+        "$.services",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("$.services.api.cpu"));
+    assert!(err.to_string().contains("minimum violation"));
+}
+
+#[test]
+fn validate_json_against_schema_rejects_invalid_values_shape() {
+    let err = validate_json_against_schema(
+        &json!({"a": 1}),
+        &json!({
+            "type": "object",
+            "values": "integer"
+        }),
+        "$",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("values at $ must be an object"));
+}
+
+#[test]
+fn validate_type_hints_accepts_nested_hints_under_object_values_schema() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "ServiceConfig": {
+                "type": "object",
+                "properties": {
+                    "port": { "type": "Port" }
+                }
+            },
+            "ServicesByName": {
+                "type": "object",
+                "values": { "type": "ServiceConfig" }
+            }
+        }
+    }))
+    .unwrap();
+
+    let data = json!({
+        "services": {
+            "api": { "port": 8080 }
+        }
+    });
+    let mut hints = BTreeMap::new();
+    hints.insert("$.services".to_string(), "ServicesByName".to_string());
+    hints.insert("$.services.api".to_string(), "ServiceConfig".to_string());
+    hints.insert("$.services.api.port".to_string(), "Port".to_string());
+
+    validate_type_hints(&data, &hints, &schema).unwrap();
 }
 
 #[test]

@@ -235,8 +235,7 @@ fn render_rust_types(schemas: &CollectedSchemas) -> String {
     if state.needs_constraint_runtime {
         out.push_str("use std::collections::BTreeMap;\n");
     }
-    if state.needs_serde_derives || state.needs_serde_json_value || state.needs_constraint_runtime
-    {
+    if state.needs_serde_derives || state.needs_serde_json_value || state.needs_constraint_runtime {
         out.push('\n');
     }
     if state.needs_constraint_runtime {
@@ -288,6 +287,9 @@ fn render_type_definition(
         if let Some(properties) = schema_obj.get("properties").and_then(JsonValue::as_object) {
             state.needs_serde_derives = true;
             render_object_struct(&rust_name, properties, schema_obj, state)
+        } else if let Some(values_schema) = schema_obj.get("values") {
+            let value_type = rust_type_for_schema(values_schema, state);
+            format!("pub type {rust_name} = std::collections::BTreeMap<String, {value_type}>;\n")
         } else {
             state.needs_serde_json_value = true;
             format!("pub type {rust_name} = Value;\n")
@@ -308,7 +310,10 @@ fn render_type_definition(
     out
 }
 
-fn render_constraint_functions(type_name: &str, constraints: &BTreeMap<String, Vec<String>>) -> String {
+fn render_constraint_functions(
+    type_name: &str,
+    constraints: &BTreeMap<String, Vec<String>>,
+) -> String {
     let mut out = String::new();
     let mut index = 1usize;
     let mut all_pairs = Vec::new();
@@ -394,7 +399,7 @@ fn is_object_schema(schema_obj: &JsonMap<String, JsonValue>) -> bool {
     match schema_obj.get("type").and_then(JsonValue::as_str) {
         Some("object") => true,
         Some(_) => false,
-        None => schema_obj.contains_key("properties"),
+        None => schema_obj.contains_key("properties") || schema_obj.contains_key("values"),
     }
 }
 
@@ -515,6 +520,10 @@ fn rust_type_for_schema(schema: &JsonValue, state: &mut RenderState) -> String {
         state.needs_serde_json_value = true;
         return "Value".to_string();
     }
+    if let Some(values_schema) = schema_obj.get("values") {
+        let value_type = rust_type_for_schema(values_schema, state);
+        return format!("std::collections::BTreeMap<String, {value_type}>");
+    }
 
     state.needs_serde_json_value = true;
     "Value".to_string()
@@ -541,8 +550,13 @@ fn rust_type_for_type_name(
             }
         }
         "object" => {
-            state.needs_serde_json_value = true;
-            "Value".to_string()
+            if let Some(values_schema) = schema_obj.get("values") {
+                let value_type = rust_type_for_schema(values_schema, state);
+                format!("std::collections::BTreeMap<String, {value_type}>")
+            } else {
+                state.needs_serde_json_value = true;
+                "Value".to_string()
+            }
         }
         other => {
             if let Some(mapped) = state.type_names.get(other) {

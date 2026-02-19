@@ -64,6 +64,10 @@ Batch:
   type: array
   items:
     type: WsMessage
+ServicesByName:
+  type: object
+  values:
+    type: WsMessage
 ---data
 example: 1
 "#;
@@ -76,6 +80,8 @@ example: 1
     assert!(rendered.contains("pub room_id: String"));
     assert!(rendered.contains("pub payload: Option<Value>"));
     assert!(rendered.contains("pub type Batch = Vec<WsMessage>;"));
+    assert!(rendered
+        .contains("pub type ServicesByName = std::collections::BTreeMap<String, WsMessage>;"));
     assert!(rendered.contains("pub fn check_ws_message_constraint_1(value: &WsMessage)"));
     assert!(rendered.contains("pub fn check_ws_message_constraints(value: &WsMessage)"));
 }

@@ -293,7 +293,7 @@ The validator supports this subset:
 - common: `type`, `enum`
 - numeric: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 - string: `minLength`, `maxLength`, `pattern`
-- object: `properties`, `required`, `optional` (on property schemas)
+- object: `properties`, `values`, `required`, `optional` (on property schemas)
 - array: `items`, `minItems`, `maxItems`
 
 Built-in primitive type names are also accepted directly:
@@ -306,6 +306,23 @@ For object schemas, properties are required by default. Mark an individual
 property as optional with `optional: true` (or shorthand `property: TypeName?` /
 `type: TypeName?`). Legacy `required: [...]` lists are
 still accepted.
+
+Typed dictionaries are supported via `values` on object schemas:
+
+```yaml
+WorkerProfile:
+  type: object
+  properties:
+    cores: integer
+    memory_gb: integer
+WorkersByName:
+  type: object
+  values:
+    type: WorkerProfile
+```
+
+`WorkersByName` means "any string key is allowed, and each value must match
+`WorkerProfile`".
 
 ## `data` Section and Type Hints
 

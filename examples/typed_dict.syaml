@@ -1,0 +1,24 @@
+---!syaml/v0
+---schema
+WorkerProfile:
+  type: object
+  properties:
+    cores:
+      type: integer
+      minimum: 1
+    memory_gb:
+      type: integer
+      minimum: 1
+WorkersByName:
+  type: object
+  values:
+    type: WorkerProfile
+
+---data
+workers <WorkersByName>:
+  api:
+    cores: 4
+    memory_gb: 16
+  batch:
+    cores: 8
+    memory_gb: 32

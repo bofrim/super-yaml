@@ -30,6 +30,7 @@ fn all_examples_compile_to_expected_json() {
         "alert_rules",
         "type_composition",
         "imported_types",
+        "typed_dict",
     ];
 
     for case in cases {
@@ -56,6 +57,7 @@ fn all_examples_validate_successfully() {
         "alert_rules",
         "type_composition",
         "imported_types",
+        "typed_dict",
     ];
 
     for case in cases {

@@ -330,6 +330,9 @@ fn render_type_definition(
     } else if is_object_schema(schema_obj) {
         if let Some(properties) = schema_obj.get("properties").and_then(JsonValue::as_object) {
             render_object_interface(&ts_name, properties, schema_obj, state)
+        } else if let Some(values_schema) = schema_obj.get("values") {
+            let value_type = ts_type_for_schema(values_schema, state);
+            format!("export type {ts_name} = Record<string, {value_type}>;")
         } else {
             format!("export type {ts_name} = unknown;")
         }
@@ -350,7 +353,10 @@ fn render_type_definition(
     out
 }
 
-fn render_constraint_functions(type_name: &str, constraints: &BTreeMap<String, Vec<String>>) -> String {
+fn render_constraint_functions(
+    type_name: &str,
+    constraints: &BTreeMap<String, Vec<String>>,
+) -> String {
     let mut out = String::new();
     let mut index = 1usize;
     let mut method_names = Vec::new();
@@ -523,7 +529,7 @@ fn is_object_schema(schema_obj: &JsonMap<String, JsonValue>) -> bool {
     match schema_obj.get("type").and_then(JsonValue::as_str) {
         Some("object") => true,
         Some(_) => false,
-        None => schema_obj.contains_key("properties"),
+        None => schema_obj.contains_key("properties") || schema_obj.contains_key("values"),
     }
 }
 
@@ -617,6 +623,10 @@ fn ts_type_for_schema(schema: &JsonValue, state: &mut RenderState) -> String {
     if schema_obj.contains_key("properties") {
         return "unknown".to_string();
     }
+    if let Some(values_schema) = schema_obj.get("values") {
+        let value_type = ts_type_for_schema(values_schema, state);
+        return format!("Record<string, {value_type}>");
+    }
 
     "unknown".to_string()
 }
@@ -640,7 +650,14 @@ fn ts_type_for_type_name(
                 "Array<unknown>".to_string()
             }
         }
-        "object" => "unknown".to_string(),
+        "object" => {
+            if let Some(values_schema) = schema_obj.get("values") {
+                let value_type = ts_type_for_schema(values_schema, state);
+                format!("Record<string, {value_type}>")
+            } else {
+                "unknown".to_string()
+            }
+        }
         other => state
             .type_names
             .get(other)

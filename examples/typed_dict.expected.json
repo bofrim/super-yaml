@@ -1,0 +1,12 @@
+{
+  "workers": {
+    "api": {
+      "cores": 4,
+      "memory_gb": 16
+    },
+    "batch": {
+      "cores": 8,
+      "memory_gb": 32
+    }
+  }
+}

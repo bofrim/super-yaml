@@ -4,7 +4,7 @@
 //! - Common: `type`, `enum`
 //! - Numeric: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 //! - String: `minLength`, `maxLength`, `pattern`
-//! - Object: `properties`, `required`, `optional` (on property schemas)
+//! - Object: `properties`, `values`, `required`, `optional` (on property schemas)
 //! - Array: `items`, `minItems`, `maxItems`
 
 use std::collections::{BTreeMap, HashSet};
@@ -159,6 +159,10 @@ fn normalize_schema_node(schema: JsonValue) -> JsonValue {
             if let Some(items) = map.get_mut("items") {
                 let normalized = normalize_schema_node(items.clone());
                 *items = normalized;
+            }
+            if let Some(values) = map.get_mut("values") {
+                let normalized = normalize_schema_node(values.clone());
+                *values = normalized;
             }
 
             JsonValue::Object(map)
@@ -590,6 +594,29 @@ fn validate_object_keywords(
                     ctx,
                 )?;
             }
+        }
+    }
+
+    if let Some(values_schema) = schema.get("values") {
+        if !values_schema.is_object() {
+            return Err(SyamlError::SchemaError(format!(
+                "values at {path} must be an object"
+            )));
+        }
+
+        let prop_map = schema.get("properties").and_then(JsonValue::as_object);
+        for (key, child_value) in obj {
+            if prop_map.is_some_and(|props| props.contains_key(key)) {
+                continue;
+            }
+            let child_path = format!("{}.{}", path, key);
+            validate_json_against_schema_inner(
+                child_value,
+                values_schema,
+                &child_path,
+                depth + 1,
+                ctx,
+            )?;
         }
     }
 

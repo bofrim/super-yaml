@@ -64,6 +64,10 @@ Batch:
   type: array
   items:
     type: WsMessage
+ServicesByName:
+  type: object
+  values:
+    type: WsMessage
 ---data
 example: 1
 "#;
@@ -76,6 +80,7 @@ example: 1
     assert!(rendered.contains("room_id: string;"));
     assert!(rendered.contains("payload?: unknown;"));
     assert!(rendered.contains("export type Batch = Array<WsMessage>;"));
+    assert!(rendered.contains("export type ServicesByName = Record<string, WsMessage>;"));
     assert!(rendered.contains("export function checkWsMessageConstraint1(value: WsMessage)"));
     assert!(rendered.contains("export function checkWsMessageConstraints(value: WsMessage)"));
 }

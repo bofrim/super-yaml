@@ -147,9 +147,13 @@ fn descend_schema_for_segment(
                 })?;
                 if let Some(found) = props.get(key) {
                     SegmentLookup::Found(found.clone())
+                } else if let Some(values_schema) = schema_obj.get("values") {
+                    SegmentLookup::Found(values_schema.clone())
                 } else {
                     SegmentLookup::ExplicitlyMissing
                 }
+            } else if let Some(values_schema) = schema_obj.get("values") {
+                SegmentLookup::Found(values_schema.clone())
             } else {
                 SegmentLookup::Unspecified
             }
