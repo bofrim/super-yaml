@@ -50,6 +50,7 @@ MessageKind:
   enum: [join, leave]
 WsMessage:
   type: object
+  constraints: "value.room_id != \"\""
   properties:
     kind:
       type: MessageKind
@@ -73,6 +74,8 @@ example: 1
     assert!(rendered.contains("room_id: string;"));
     assert!(rendered.contains("payload?: unknown;"));
     assert!(rendered.contains("export type Batch = Array<WsMessage>;"));
+    assert!(rendered.contains("export function checkWsMessageConstraint1(value: WsMessage)"));
+    assert!(rendered.contains("export function checkWsMessageConstraints(value: WsMessage)"));
 }
 
 #[test]
