@@ -320,7 +320,9 @@ name: ok
     let err = validate_document(input, &env_provider(&[])).unwrap_err();
     assert!(err.to_string().contains("unknown type reference"));
     assert!(err.to_string().contains("MissingType"));
-    assert!(err.to_string().contains("schema.Service.properties.port.type"));
+    assert!(err
+        .to_string()
+        .contains("schema.Service.properties.port.type"));
 }
 
 #[test]

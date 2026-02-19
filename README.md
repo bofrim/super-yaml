@@ -1,6 +1,6 @@
 # super_yaml
 
-`super_yaml` is a Rust crate and CLI for compiling a strict, sectioned YAML dialect (`.syaml`) into resolved JSON or YAML, and for generating first-pass Rust types from schema type definitions.
+`super_yaml` is a Rust crate and CLI for compiling a strict, sectioned YAML dialect (`.syaml`) into resolved JSON or YAML, and for generating first-pass Rust and TypeScript types from schema type definitions.
 
 It combines:
 
@@ -49,6 +49,12 @@ cargo run --bin super-yaml -- compile examples/basic.syaml --format yaml
 
 ```bash
 cargo run --bin super-yaml -- compile examples/type_composition.syaml --format rust
+```
+
+### 5. Generate TypeScript types
+
+```bash
+cargo run --bin super-yaml -- compile examples/type_composition.syaml --format ts
 ```
 
 ## Document Format (v0)
@@ -374,8 +380,8 @@ This is not a full YAML 1.2 parser.
 
 ```text
 super-yaml validate <file> [--allow-env KEY]...
-super-yaml compile <file> [--pretty] [--format json|yaml|rust] [--allow-env KEY]...
-super-yaml compile <file> [--yaml|--json|--rust] [--allow-env KEY]...
+super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript] [--allow-env KEY]...
+super-yaml compile <file> [--yaml|--json|--rust|--ts] [--allow-env KEY]...
 ```
 
 ### `validate`
@@ -395,8 +401,8 @@ super-yaml compile <file> [--yaml|--json|--rust] [--allow-env KEY]...
 Options:
 
 - `--pretty`: pretty JSON output
-- `--format json|yaml|rust`: explicit output format
-- `--yaml`, `--json`, `--rust`: format shortcuts
+- `--format json|yaml|rust|ts|typescript`: explicit output format
+- `--yaml`, `--json`, `--rust`, `--ts`: format shortcuts
 - `--allow-env KEY`: allow access to one process environment variable key (repeatable)
 
 ## Rust API
@@ -404,7 +410,7 @@ Options:
 ```rust,no_run
 use super_yaml::{
     compile_document, compile_document_to_json, compile_document_to_yaml, generate_rust_types,
-    validate_document, ProcessEnvProvider,
+    generate_typescript_types, validate_document, ProcessEnvProvider,
 };
 
 fn run(input: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -414,12 +420,14 @@ fn run(input: &str) -> Result<(), Box<dyn std::error::Error>> {
     let json = compile_document_to_json(input, &env, true)?;
     let yaml = compile_document_to_yaml(input, &env)?;
     let rust = generate_rust_types(input)?;
+    let ts = generate_typescript_types(input)?;
     validate_document(input, &env)?;
 
     println!("{}", compiled.to_json_string(false)?);
     println!("{}", json);
     println!("{}", yaml);
     println!("{}", rust);
+    println!("{}", ts);
     Ok(())
 }
 ```
@@ -499,7 +507,7 @@ cargo clippy --all-targets --all-features
 - only `from: env` bindings are supported
 - expression variable paths are dot-based object traversal
 - parser is a YAML subset, not full YAML
-- Rust codegen is first-pass and currently targets named top-level schema definitions only (anonymous inline object schemas become `serde_json::Value`)
+- Rust and TypeScript codegen are first-pass and currently target named top-level schema definitions only (anonymous inline object schemas map to fallback types)
 - compilation enforces depth/size guardrails for expressions, constraints, and YAML structures
 
 ## License

@@ -11,7 +11,8 @@
 //!
 //! Use [`compile_document`] for full compilation, [`validate_document`] for validation-only
 //! workflows, [`compile_document_to_json`] / [`compile_document_to_yaml`] for serialized output,
-//! or [`generate_rust_types`] / [`generate_rust_types_from_path`] for Rust code generation.
+//! or [`generate_rust_types`] / [`generate_rust_types_from_path`] and
+//! [`generate_typescript_types`] / [`generate_typescript_types_from_path`] for code generation.
 
 /// Abstract syntax tree and compiled document container types.
 pub mod ast;
@@ -31,6 +32,8 @@ pub mod schema;
 pub mod section_scanner;
 /// Type-hint extraction (`key <Type>`) and normalization.
 pub mod type_hints;
+/// TypeScript type generation from named schema definitions.
+pub mod typescript_codegen;
 /// Constraint and type-hint validation routines.
 pub mod validate;
 /// JSON-to-YAML renderer used by compiled YAML output.
@@ -50,6 +53,7 @@ pub use rust_codegen::{generate_rust_types, generate_rust_types_from_path};
 use schema::{parse_schema, validate_schema_type_references};
 use section_scanner::scan_sections;
 use type_hints::normalize_data_with_hints;
+pub use typescript_codegen::{generate_typescript_types, generate_typescript_types_from_path};
 use validate::{build_effective_constraints, validate_constraints, validate_type_hints};
 
 /// Parses a `.syaml` document into its structured representation.

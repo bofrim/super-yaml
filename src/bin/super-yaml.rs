@@ -1,8 +1,8 @@
 use std::{collections::HashSet, env, path::PathBuf, process::ExitCode};
 
 use super_yaml::{
-    compile_document_from_path, generate_rust_types_from_path, validate_document_from_path,
-    EnvProvider, ProcessEnvProvider,
+    compile_document_from_path, generate_rust_types_from_path, generate_typescript_types_from_path,
+    validate_document_from_path, EnvProvider, ProcessEnvProvider,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -10,6 +10,7 @@ enum OutputFormat {
     Json,
     Yaml,
     Rust,
+    TypeScript,
 }
 
 #[derive(Debug)]
@@ -98,6 +99,7 @@ fn run_compile(
             .map_err(|e| e.to_string())?
             .to_yaml_string()),
         OutputFormat::Rust => generate_rust_types_from_path(file),
+        OutputFormat::TypeScript => generate_typescript_types_from_path(file),
     }
     .map_err(|e| e.to_string())?;
 
@@ -137,6 +139,10 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 format = OutputFormat::Rust;
                 i += 1;
             }
+            "--ts" => {
+                format = OutputFormat::TypeScript;
+                i += 1;
+            }
             "--json" => {
                 format = OutputFormat::Json;
                 i += 1;
@@ -144,16 +150,18 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
             "--format" => {
                 if i + 1 >= args.len() {
                     return Err(
-                        "missing value for --format (expected json, yaml, or rust)".to_string()
+                        "missing value for --format (expected json, yaml, rust, ts, or typescript)"
+                            .to_string(),
                     );
                 }
                 format = match args[i + 1].as_str() {
                     "json" => OutputFormat::Json,
                     "yaml" => OutputFormat::Yaml,
                     "rust" => OutputFormat::Rust,
+                    "ts" | "typescript" => OutputFormat::TypeScript,
                     other => {
                         return Err(format!(
-                            "invalid --format value '{other}' (expected json, yaml, or rust)"
+                            "invalid --format value '{other}' (expected json, yaml, rust, ts, or typescript)"
                         ))
                     }
                 };
@@ -198,9 +206,9 @@ fn print_usage() {
     eprintln!("usage:");
     eprintln!("  super-yaml validate <file> [--allow-env KEY]...");
     eprintln!(
-        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust] [--allow-env KEY]..."
+        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript] [--allow-env KEY]..."
     );
-    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust] [--allow-env KEY]...");
+    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts] [--allow-env KEY]...");
     eprintln!(
         "note: environment access is disabled by default; use --allow-env to permit specific keys."
     );
@@ -238,11 +246,38 @@ mod tests {
     }
 
     #[test]
+    fn parse_compile_ts_format() {
+        let args = vec!["--format".to_string(), "ts".to_string()];
+        let options = parse_compile_options(&args).unwrap();
+        assert!(!options.pretty);
+        assert!(matches!(options.format, OutputFormat::TypeScript));
+        assert!(options.allowed_env_keys.is_empty());
+    }
+
+    #[test]
+    fn parse_compile_typescript_format() {
+        let args = vec!["--format".to_string(), "typescript".to_string()];
+        let options = parse_compile_options(&args).unwrap();
+        assert!(!options.pretty);
+        assert!(matches!(options.format, OutputFormat::TypeScript));
+        assert!(options.allowed_env_keys.is_empty());
+    }
+
+    #[test]
     fn parse_compile_rust_shortcut() {
         let args = vec!["--rust".to_string()];
         let options = parse_compile_options(&args).unwrap();
         assert!(!options.pretty);
         assert!(matches!(options.format, OutputFormat::Rust));
+        assert!(options.allowed_env_keys.is_empty());
+    }
+
+    #[test]
+    fn parse_compile_ts_shortcut() {
+        let args = vec!["--ts".to_string()];
+        let options = parse_compile_options(&args).unwrap();
+        assert!(!options.pretty);
+        assert!(matches!(options.format, OutputFormat::TypeScript));
         assert!(options.allowed_env_keys.is_empty());
     }
 
@@ -277,5 +312,13 @@ mod tests {
         let args = vec!["--allow-env".to_string()];
         let err = parse_compile_options(&args).unwrap_err();
         assert!(err.contains("missing value for --allow-env"));
+    }
+
+    #[test]
+    fn parse_compile_invalid_format_mentions_ts_options() {
+        let args = vec!["--format".to_string(), "wat".to_string()];
+        let err = parse_compile_options(&args).unwrap_err();
+        assert!(err.contains("ts"));
+        assert!(err.contains("typescript"));
     }
 }

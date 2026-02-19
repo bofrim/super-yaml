@@ -1880,6 +1880,14 @@ interface DataKeyLocation {
   explicitTypeHint?: string;
 }
 
+interface SchemaKeyLocation {
+  path: string;
+  normalizedPath: string;
+  line: number;
+  start: number;
+  end: number;
+}
+
 interface ParseStackEntry {
   indent: number;
   path: string;
@@ -1908,30 +1916,18 @@ function inferPathRange(
   document: vscode.TextDocument,
   message: string
 ): vscode.Range | undefined {
-  const path = extractJsonPathFromMessage(message);
+  const path = extractDiagnosticPathFromMessage(message);
   if (!path) {
     return undefined;
   }
 
-  const normalizedTarget = normalizeJsonPath(path);
-  const locations = collectDataKeyLocations(document);
-  if (locations.length === 0) {
+  const locationMatch = findPathLocationRange(document, path);
+  if (locationMatch) {
+    return locationMatch;
+  }
+
+  if (path.startsWith("schema.")) {
     return undefined;
-  }
-
-  const exact = locations.find((loc) => loc.path === path);
-  if (exact) {
-    return new vscode.Range(exact.line, exact.start, exact.line, exact.end);
-  }
-
-  const normalized = locations.find((loc) => loc.normalizedPath === normalizedTarget);
-  if (normalized) {
-    return new vscode.Range(
-      normalized.line,
-      normalized.start,
-      normalized.line,
-      normalized.end
-    );
   }
 
   const segment = lastPathSegment(path);
@@ -1939,8 +1935,13 @@ function inferPathRange(
     return undefined;
   }
 
+  const fallbackLocations = collectPathLocationsForPrefix(document, path);
+  if (fallbackLocations.length === 0) {
+    return undefined;
+  }
+
   const lineRegex = new RegExp(`^\\s*${escapeRegex(segment)}(?:\\s*<[^>]+>)?\\s*:`);
-  for (const loc of locations) {
+  for (const loc of fallbackLocations) {
     const code = lineWithoutComment(document.lineAt(loc.line).text);
     if (lineRegex.test(code)) {
       return new vscode.Range(loc.line, loc.start, loc.line, loc.end);
@@ -1949,8 +1950,10 @@ function inferPathRange(
   return undefined;
 }
 
-function extractJsonPathFromMessage(message: string): string | undefined {
+function extractDiagnosticPathFromMessage(message: string): string | undefined {
   const patterns = [
+    /\bat\s+'?(schema\.[A-Za-z0-9_.\[\]]+)'?/i,
+    /\bpath\s+'(schema\.[A-Za-z0-9_.\[\]]+)'/i,
     /normalized\s+'(\$[A-Za-z0-9_.\[\]]+)'/i,
     /\bat\s+'?(\$[A-Za-z0-9_.\[\]]+)'?/i,
     /\bpath\s+'(\$[A-Za-z0-9_.\[\]]+)'/i
@@ -1966,6 +1969,55 @@ function extractJsonPathFromMessage(message: string): string | undefined {
 
 function normalizeJsonPath(path: string): string {
   return path.replace(/\[\d+\]/g, "");
+}
+
+function findPathLocationRange(
+  document: vscode.TextDocument,
+  path: string
+): vscode.Range | undefined {
+  const locations = collectPathLocationsForPrefix(document, path);
+  if (locations.length === 0) {
+    return undefined;
+  }
+
+  const normalizedTarget = normalizeJsonPath(path);
+  const exact = locations.find((loc) => loc.path === path);
+  if (exact) {
+    return new vscode.Range(exact.line, exact.start, exact.line, exact.end);
+  }
+
+  const normalized = locations.find((loc) => loc.normalizedPath === normalizedTarget);
+  if (normalized) {
+    return new vscode.Range(
+      normalized.line,
+      normalized.start,
+      normalized.line,
+      normalized.end
+    );
+  }
+
+  if (path.startsWith("schema.") && path.endsWith(".type")) {
+    const shorthandParentPath = path.slice(0, -".type".length);
+    const parent = locations.find((loc) => loc.path === shorthandParentPath);
+    if (parent) {
+      return new vscode.Range(parent.line, parent.start, parent.line, parent.end);
+    }
+  }
+
+  return undefined;
+}
+
+function collectPathLocationsForPrefix(
+  document: vscode.TextDocument,
+  path: string
+): Array<DataKeyLocation | SchemaKeyLocation> {
+  if (path.startsWith("schema.")) {
+    return collectSchemaKeyLocations(document);
+  }
+  if (path.startsWith("$")) {
+    return collectDataKeyLocations(document);
+  }
+  return [];
 }
 
 function lastPathSegment(path: string): string | undefined {
@@ -2070,6 +2122,58 @@ function collectDataKeyLocations(document: vscode.TextDocument): DataKeyLocation
       explicitTypeHint
     });
     stack.push({ indent, path });
+  }
+
+  return locations;
+}
+
+function collectSchemaKeyLocations(document: vscode.TextDocument): SchemaKeyLocation[] {
+  const bounds = findSectionBounds(document, "schema");
+  if (!bounds) {
+    return [];
+  }
+
+  const locations: SchemaKeyLocation[] = [];
+  const stack: ParseStackEntry[] = [];
+
+  for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+
+    const keyInfo = parseCanonicalKey(keyMatch[2]);
+    if (!keyInfo) {
+      continue;
+    }
+
+    stack.push({ indent, path: keyInfo.key });
+    const pathSegments = stack.map((entry) => entry.path);
+    const withoutWrapper =
+      pathSegments[0] === "types" ? pathSegments.slice(1) : pathSegments;
+    if (withoutWrapper.length === 0) {
+      continue;
+    }
+
+    const path = `schema.${withoutWrapper.join(".")}`;
+    const start = indent + keyInfo.keyOffset;
+    locations.push({
+      path,
+      normalizedPath: normalizeJsonPath(path),
+      line,
+      start,
+      end: start + keyInfo.key.length
+    });
   }
 
   return locations;
