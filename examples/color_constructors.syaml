@@ -1,0 +1,40 @@
+---!syaml/v0
+---schema
+Color:
+  type: object
+  properties:
+    red: integer
+    green: integer
+    blue: integer
+    alpha: number?
+  constructors:
+    rgb:
+      order: 1
+      regex: '^rgb\((?<red>\d+),\s*(?<green>\d+),\s*(?<blue>\d+)\)$'
+      defaults:
+        alpha: 1
+    rgba:
+      order: 1
+      regex: '^rgba\((?<red>\d+),\s*(?<green>\d+),\s*(?<blue>\d+),\s*(?<alpha>0|1|0?\.\d+)\)$'
+    hex:
+      order: 2
+      regex: '^#(?<red_hex>[0-9A-Fa-f]{2})(?<green_hex>[0-9A-Fa-f]{2})(?<blue_hex>[0-9A-Fa-f]{2})(?<alpha_hex>[0-9A-Fa-f]{2})?$'
+      map:
+        red:
+          group: red_hex
+          decode: hex_u8
+        green:
+          group: green_hex
+          decode: hex_u8
+        blue:
+          group: blue_hex
+          decode: hex_u8
+        alpha:
+          group: alpha_hex
+          decode: hex_alpha
+      defaults:
+        alpha: 1
+---data
+accent_rgb <Color>: "rgb(10, 20, 30)"
+accent_rgba <Color>: "rgba(10, 20, 30, 0.5)"
+accent_hex <Color>: "#0A141E80"

@@ -293,7 +293,7 @@ The validator supports this subset:
 - common: `type`, `enum`
 - numeric: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 - string: `minLength`, `maxLength`, `pattern`
-- object: `properties`, `values`, `required`, `optional` (on property schemas)
+- object: `properties`, `values`, `required`, `optional` (on property schemas), `constructors`
 - array: `items`, `minItems`, `maxItems`
 
 Built-in primitive type names are also accepted directly:
@@ -323,6 +323,51 @@ WorkersByName:
 
 `WorkersByName` means "any string key is allowed, and each value must match
 `WorkerProfile`".
+
+Object schemas can also define string constructors for type-hinted fields:
+
+```yaml
+Color:
+  type: object
+  properties:
+    red: integer
+    green: integer
+    blue: integer
+    alpha: number?
+  constructors:
+    rgb:
+      order: 1
+      regex: '^rgb\((?<red>\d+),\s*(?<green>\d+),\s*(?<blue>\d+)\)$'
+      defaults: { alpha: 1 }
+    rgba:
+      order: 1
+      regex: '^rgba\((?<red>\d+),\s*(?<green>\d+),\s*(?<blue>\d+),\s*(?<alpha>0|1|0?\.\d+)\)$'
+    hex:
+      order: 2
+      regex: '^#(?<red_hex>[0-9A-Fa-f]{2})(?<green_hex>[0-9A-Fa-f]{2})(?<blue_hex>[0-9A-Fa-f]{2})(?<alpha_hex>[0-9A-Fa-f]{2})?$'
+      map:
+        red: { group: red_hex, decode: hex_u8 }
+        green: { group: green_hex, decode: hex_u8 }
+        blue: { group: blue_hex, decode: hex_u8 }
+        alpha: { group: alpha_hex, decode: hex_alpha }
+      defaults: { alpha: 1 }
+```
+
+`constructors` rules:
+
+- enabled only on object types
+- `constructors` is a mapping of named constructor definitions
+- each constructor must declare `regex`; optional fields are `map`, `defaults`, and `order`
+- if one or more ordered constructors match, the lowest `order` wins
+- if no ordered constructor matches, exactly one unordered constructor must match
+- ambiguous matches (multiple unordered, or tie on lowest ordered value) are errors
+- default mapping uses capture-group name -> object field name
+- optional `map` can override source group and decoder (`auto`, `string`,
+  `integer`, `number`, `boolean`, `hex_u8`, `hex_alpha`)
+- `map.<field>.from_enum: <TypeName>` can validate/map from a named string enum type
+- `decode` and `from_enum` are mutually exclusive on a map rule
+- optional `defaults` fill fields not set by captures
+- coercion runs only for data paths with type hints
 
 ## `data` Section and Type Hints
 
@@ -489,8 +534,9 @@ let env = MapEnvProvider::new(vars);
 3. parse schema and normalize data/type hints
 4. resolve env bindings
 5. resolve expressions/interpolations
-6. validate type hints against schema
-7. validate constraints
+6. coerce hinted string values through object constructors
+7. validate type hints against schema
+8. validate constraints
 
 If any step fails, compilation stops with a `SyamlError`.
 
@@ -520,6 +566,8 @@ The repository ships with sample `.syaml` inputs and expected JSON outputs:
 - `examples/inventory_policy.syaml`
 - `examples/alert_rules.syaml`
 - `examples/type_composition.syaml`
+- `examples/color_constructors.syaml`
+- `examples/vm_resource.syaml`
 
 Each has a matching `examples/*.expected.json`.
 

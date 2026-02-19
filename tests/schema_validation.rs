@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super_yaml::schema::{
     parse_schema, resolve_type_schema, validate_json_against_schema,
-    validate_json_against_schema_with_types,
+    validate_json_against_schema_with_types, validate_schema_type_references,
 };
 use super_yaml::validate::{
     build_effective_constraints, validate_constraints, validate_type_hints,
@@ -1270,4 +1270,172 @@ fn validate_constraints_rejects_overlong_expression() {
     assert!(err
         .to_string()
         .contains("constraint expression at '$.a' exceeds max length"));
+}
+
+#[test]
+fn validate_schema_type_references_accepts_valid_constructor_schema() {
+    let schema = parse_schema(&json!({
+        "Color": {
+            "type": "object",
+            "properties": {
+                "red": "integer",
+                "green": "integer",
+                "blue": "integer",
+                "alpha": "number?"
+            },
+            "constructors": {
+                "rgb": {
+                        "regex": "^rgb\\((?<red>\\d+),(?<green>\\d+),(?<blue>\\d+)\\)$",
+                        "defaults": {
+                            "alpha": 1
+                        }
+                    },
+                "hex": {
+                        "regex": "^#(?<red_hex>[0-9A-Fa-f]{2})(?<green_hex>[0-9A-Fa-f]{2})(?<blue_hex>[0-9A-Fa-f]{2})$",
+                        "map": {
+                            "red": { "group": "red_hex", "decode": "hex_u8" },
+                            "green": { "group": "green_hex", "decode": "hex_u8" },
+                            "blue": { "group": "blue_hex", "decode": "hex_u8" }
+                        }
+                    }
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_schema_type_references(&schema.types).unwrap();
+}
+
+#[test]
+fn validate_schema_type_references_rejects_invalid_constructor_regex() {
+    let schema = parse_schema(&json!({
+        "Color": {
+            "type": "object",
+            "constructors": {
+                "bad": { "regex": "[a-z" }
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(err.to_string().contains("invalid constructor regex"));
+}
+
+#[test]
+fn validate_schema_type_references_rejects_constructor_decode_name() {
+    let schema = parse_schema(&json!({
+        "Color": {
+            "type": "object",
+            "properties": {
+                "red": "integer"
+            },
+            "constructors": {
+                "bad_decode": {
+                        "regex": "^r(?<raw>[0-9A-Fa-f]{2})$",
+                        "map": {
+                            "red": { "group": "raw", "decode": "hex_byte" }
+                        }
+                    }
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(err.to_string().contains("unsupported decode"));
+}
+
+#[test]
+fn validate_schema_type_references_rejects_constructors_for_non_object_types() {
+    let schema = parse_schema(&json!({
+        "ColorName": {
+            "type": "string",
+            "constructors": {
+                "named": { "regex": "^red$" }
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(err.to_string().contains("require type: object"));
+}
+
+#[test]
+fn validate_schema_type_references_accepts_constructor_from_enum() {
+    let schema = parse_schema(&json!({
+        "MemoryUnit": ["MiB", "GiB"],
+        "MemorySpec": {
+            "type": "object",
+            "properties": {
+                "amount": "integer",
+                "unit": "MemoryUnit"
+            },
+            "constructors": {
+                "parse": {
+                        "regex": "^(?<amount>\\d+)(?<raw_unit>[A-Za-z]+)$",
+                        "map": {
+                            "amount": { "group": "amount", "decode": "integer" },
+                            "unit": { "group": "raw_unit", "from_enum": "MemoryUnit" }
+                        }
+                    }
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_schema_type_references(&schema.types).unwrap();
+}
+
+#[test]
+fn validate_schema_type_references_rejects_constructor_from_enum_decode_conflict() {
+    let schema = parse_schema(&json!({
+        "MemoryUnit": ["MiB", "GiB"],
+        "MemorySpec": {
+            "type": "object",
+            "properties": {
+                "unit": "MemoryUnit"
+            },
+            "constructors": {
+                "bad": {
+                        "regex": "^(?<raw_unit>[A-Za-z]+)$",
+                        "map": {
+                            "unit": { "group": "raw_unit", "decode": "string", "from_enum": "MemoryUnit" }
+                        }
+                    }
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("cannot set both 'decode' and 'from_enum'"));
+}
+
+#[test]
+fn validate_schema_type_references_rejects_constructor_from_enum_unknown_type() {
+    let schema = parse_schema(&json!({
+        "MemorySpec": {
+            "type": "object",
+            "properties": {
+                "unit": "string"
+            },
+            "constructors": {
+                "bad_enum_ref": {
+                        "regex": "^(?<raw_unit>[A-Za-z]+)$",
+                        "map": {
+                            "unit": { "group": "raw_unit", "from_enum": "MissingEnum" }
+                        }
+                    }
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(err.to_string().contains("unknown type reference"));
+    assert!(err.to_string().contains("MissingEnum"));
 }

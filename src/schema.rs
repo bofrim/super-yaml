@@ -4,7 +4,7 @@
 //! - Common: `type`, `enum`
 //! - Numeric: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 //! - String: `minLength`, `maxLength`, `pattern`
-//! - Object: `properties`, `values`, `required`, `optional` (on property schemas)
+//! - Object: `properties`, `values`, `required`, `optional` (on property schemas), `constructors`
 //! - Array: `items`, `minItems`, `maxItems`
 
 use std::collections::{BTreeMap, HashSet};
@@ -84,6 +84,7 @@ fn validate_schema_type_references_inner(
 ) -> Result<(), SyamlError> {
     match schema {
         JsonValue::Object(map) => {
+            validate_constructor_keywords(map, path, types)?;
             for (key, child) in map {
                 let child_path = format!("{path}.{key}");
                 if key == "type" {
@@ -176,6 +177,199 @@ fn parse_optional_type_marker(type_name: &str) -> (&str, bool) {
         Some(base) if !base.is_empty() => (base, true),
         _ => (type_name, false),
     }
+}
+
+fn validate_constructor_keywords(
+    schema: &serde_json::Map<String, JsonValue>,
+    path: &str,
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    let Some(raw_constructors) = schema.get("constructors") else {
+        return Ok(());
+    };
+
+    let declared_type = schema
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "constructors at {path} require schema node with type: object"
+            ))
+        })?;
+    if declared_type != "object" {
+        return Err(SyamlError::SchemaError(format!(
+            "constructors at {path} require type: object"
+        )));
+    }
+
+    let constructors = raw_constructors.as_object().ok_or_else(|| {
+        SyamlError::SchemaError(format!("constructors at {path} must be an object"))
+    })?;
+    if constructors.is_empty() {
+        return Err(SyamlError::SchemaError(format!(
+            "constructors at {path} must not be empty"
+        )));
+    }
+
+    let property_map = schema.get("properties").and_then(JsonValue::as_object);
+
+    for (constructor_name, raw_constructor) in constructors {
+        let constructor_path = format!("{path}.constructors.{constructor_name}");
+        let constructor = raw_constructor.as_object().ok_or_else(|| {
+            SyamlError::SchemaError(format!("{constructor_path} must be an object"))
+        })?;
+
+        let regex_text = constructor
+            .get("regex")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| {
+                SyamlError::SchemaError(format!("{constructor_path}.regex must be a string"))
+            })?;
+        let regex = Regex::new(regex_text).map_err(|e| {
+            SyamlError::SchemaError(format!(
+                "invalid constructor regex '{}' at {}: {}",
+                regex_text, constructor_path, e
+            ))
+        })?;
+        if let Some(order) = constructor.get("order") {
+            let Some(parsed) = order.as_i64() else {
+                return Err(SyamlError::SchemaError(format!(
+                    "{constructor_path}.order must be an integer >= 0"
+                )));
+            };
+            if parsed < 0 {
+                return Err(SyamlError::SchemaError(format!(
+                    "{constructor_path}.order must be an integer >= 0"
+                )));
+            }
+        }
+
+        let mut capture_names = HashSet::new();
+        for name in regex.capture_names().flatten() {
+            capture_names.insert(name.to_string());
+        }
+
+        if let Some(raw_map) = constructor.get("map") {
+            let map = raw_map.as_object().ok_or_else(|| {
+                SyamlError::SchemaError(format!("{constructor_path}.map must be an object"))
+            })?;
+            for (dest, raw_rule) in map {
+                if let Some(props) = property_map {
+                    if !props.contains_key(dest) {
+                        return Err(SyamlError::SchemaError(format!(
+                            "{constructor_path}.map destination '{}' must be declared in properties",
+                            dest
+                        )));
+                    }
+                }
+                let rule_path = format!("{constructor_path}.map.{dest}");
+                let rule = raw_rule.as_object().ok_or_else(|| {
+                    SyamlError::SchemaError(format!("{rule_path} must be an object"))
+                })?;
+                let group = rule
+                    .get("group")
+                    .and_then(JsonValue::as_str)
+                    .ok_or_else(|| {
+                        SyamlError::SchemaError(format!("{rule_path}.group must be a string"))
+                    })?;
+                if !capture_names.contains(group) {
+                    return Err(SyamlError::SchemaError(format!(
+                        "{rule_path}.group references unknown capture group '{}'",
+                        group
+                    )));
+                }
+                let raw_decode = rule.get("decode");
+                let raw_from_enum = rule.get("from_enum");
+                if raw_decode.is_some() && raw_from_enum.is_some() {
+                    return Err(SyamlError::SchemaError(format!(
+                        "{rule_path} cannot set both 'decode' and 'from_enum'"
+                    )));
+                }
+                if let Some(raw_decode) = raw_decode {
+                    let decode = raw_decode.as_str().ok_or_else(|| {
+                        SyamlError::SchemaError(format!("{rule_path}.decode must be a string"))
+                    })?;
+                    validate_decode_name(decode, &format!("{rule_path}.decode"))?;
+                }
+                if let Some(raw_from_enum) = raw_from_enum {
+                    let enum_type_name = raw_from_enum.as_str().ok_or_else(|| {
+                        SyamlError::SchemaError(format!("{rule_path}.from_enum must be a string"))
+                    })?;
+                    validate_constructor_from_enum_reference(
+                        types,
+                        enum_type_name,
+                        &format!("{rule_path}.from_enum"),
+                    )?;
+                }
+            }
+        }
+
+        if let Some(raw_defaults) = constructor.get("defaults") {
+            let defaults = raw_defaults.as_object().ok_or_else(|| {
+                SyamlError::SchemaError(format!("{constructor_path}.defaults must be an object"))
+            })?;
+            if let Some(props) = property_map {
+                for key in defaults.keys() {
+                    if !props.contains_key(key) {
+                        return Err(SyamlError::SchemaError(format!(
+                            "{constructor_path}.defaults key '{}' must be declared in properties",
+                            key
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_constructor_from_enum_reference(
+    types: &BTreeMap<String, JsonValue>,
+    enum_type_name: &str,
+    path: &str,
+) -> Result<(), SyamlError> {
+    let enum_schema = types.get(enum_type_name).ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "unknown type reference at {}: '{}' not found in schema",
+            path, enum_type_name
+        ))
+    })?;
+    let enum_obj = enum_schema.as_object().ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "referenced enum type '{}' at {} must be an object schema",
+            enum_type_name, path
+        ))
+    })?;
+    let enum_values = enum_obj
+        .get("enum")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "referenced type '{}' at {} must declare an enum array",
+                enum_type_name, path
+            ))
+        })?;
+    if enum_values.iter().any(|v| !v.is_string()) {
+        return Err(SyamlError::SchemaError(format!(
+            "referenced enum type '{}' at {} must contain only strings",
+            enum_type_name, path
+        )));
+    }
+    Ok(())
+}
+
+fn validate_decode_name(name: &str, path: &str) -> Result<(), SyamlError> {
+    if matches!(
+        name,
+        "auto" | "string" | "integer" | "number" | "boolean" | "hex_u8" | "hex_alpha"
+    ) {
+        return Ok(());
+    }
+    Err(SyamlError::SchemaError(format!(
+        "unsupported decode '{}' at {}",
+        name, path
+    )))
 }
 
 fn collect_type_constraints(

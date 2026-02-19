@@ -1,0 +1,35 @@
+{
+  "resource": {
+    "cpu": 4,
+    "disk_count": 2,
+    "disks": [
+      {
+        "disk_kind": "ssd",
+        "mount_path": "/",
+        "name": "root",
+        "size_gb": 120
+      },
+      {
+        "disk_kind": "ssd",
+        "mount_path": "/data",
+        "name": "data",
+        "size_gb": 512
+      }
+    ],
+    "image": "ubuntu-22.04",
+    "memory": {
+      "amount": 16,
+      "unit": "GiB"
+    },
+    "network": {
+      "assign_public_ip": false,
+      "subnet": "10.40.2.0/24"
+    },
+    "region": "us-west-2",
+    "tags": {
+      "env": "prod",
+      "owner": "platform"
+    },
+    "vm_name": "api-prod-01"
+  }
+}

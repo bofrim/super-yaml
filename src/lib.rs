@@ -7,7 +7,8 @@
 //! 3. Schema extraction and type-hint normalization.
 //! 4. Environment binding resolution.
 //! 5. Derived expression/interpolation resolution.
-//! 6. Type-hint and constraint validation.
+//! 6. String constructor coercion for hinted object types.
+//! 7. Type-hint and constraint validation.
 //!
 //! Use [`compile_document`] for full compilation, [`validate_document`] for validation-only
 //! workflows, [`compile_document_to_json`] / [`compile_document_to_yaml`] for serialized output,
@@ -16,6 +17,8 @@
 
 /// Abstract syntax tree and compiled document container types.
 pub mod ast;
+/// Regex-based string constructor coercion for hinted object types.
+pub mod coerce;
 /// Error types used throughout parsing, compilation, and validation.
 pub mod error;
 /// Expression lexer/parser/evaluator used by derived values and constraints.
@@ -46,6 +49,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 
 use ast::{CompiledDocument, DataDoc, EnvBinding, ImportBinding, Meta, ParsedDocument};
+use coerce::coerce_string_constructors_for_type_hints;
 pub use error::SyamlError;
 use resolve::{resolve_env_bindings, resolve_expressions};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
@@ -253,6 +257,7 @@ fn compile_parsed_document(
 
     let env_values = resolve_env_bindings(parsed.meta.as_ref(), ctx.env_provider)?;
     resolve_expressions(&mut data, &env_values)?;
+    coerce_string_constructors_for_type_hints(&mut data, &parsed.data.type_hints, &schema.types)?;
 
     validate_type_hints(&data, &parsed.data.type_hints, &schema)?;
     let constraints = build_effective_constraints(&parsed.data.type_hints, &schema);

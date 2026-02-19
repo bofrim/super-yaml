@@ -321,6 +321,14 @@ class SyamlSemanticTokensProvider
             collector.add(line, reference.optionalMarkerStart, 1, "operator");
           }
         }
+        for (const reference of parseSchemaFromEnumTypeReferences(code)) {
+          collector.add(
+            line,
+            reference.start,
+            reference.name.length,
+            reference.isBuiltin ? "keyword" : "type"
+          );
+        }
 
         for (const shorthand of parseSchemaInlineTypeShorthandReferences(code)) {
           collector.add(
@@ -735,6 +743,21 @@ function collectSchemaTypeReferences(document: vscode.TextDocument): TypeOccurre
     }
 
     for (const reference of parseSchemaTypeValueReferences(code)) {
+      if (reference.isBuiltin) {
+        continue;
+      }
+      occurrences.push({
+        name: reference.name,
+        range: new vscode.Range(
+          line,
+          reference.start,
+          line,
+          reference.start + reference.name.length
+        ),
+        kind: "reference"
+      });
+    }
+    for (const reference of parseSchemaFromEnumTypeReferences(code)) {
       if (reference.isBuiltin) {
         continue;
       }
@@ -1426,6 +1449,44 @@ function parseSchemaTypeValueReferences(
   return references;
 }
 
+function parseSchemaFromEnumTypeReferences(
+  code: string
+): Array<{
+  name: string;
+  start: number;
+  isBuiltin: boolean;
+}> {
+  const references: Array<{
+    name: string;
+    start: number;
+    isBuiltin: boolean;
+  }> = [];
+  const fromEnumRegex =
+    /(?:^\s*|[{,]\s*)from_enum\s*:\s*(?:"([A-Za-z_][\w.]*)"|'([A-Za-z_][\w.]*)'|([A-Za-z_][\w.]*))/g;
+
+  for (
+    let match = fromEnumRegex.exec(code);
+    match;
+    match = fromEnumRegex.exec(code)
+  ) {
+    const typeName = match[1] ?? match[2] ?? match[3];
+    if (!typeName) {
+      continue;
+    }
+    const start = match.index + match[0].lastIndexOf(typeName);
+    if (start < 0) {
+      continue;
+    }
+    references.push({
+      name: typeName,
+      start,
+      isBuiltin: isBuiltinTypeName(typeName)
+    });
+  }
+
+  return references;
+}
+
 function parseSchemaInlineTypeShorthandReferences(
   code: string
 ): Array<{
@@ -1752,22 +1813,24 @@ async function resolveParserCommand(
     return { cwd, command: configuredPath, argPrefix: [] };
   }
 
-  const bundledBinary = await resolveBundledBinary(extensionPath);
-  if (bundledBinary) {
-    return { cwd, command: bundledBinary, argPrefix: [] };
-  }
-
   if (workspace) {
     const binaryName = parserBinaryNameForPlatform(process.platform);
     const localBinaryCandidates = [
       path.join(workspace.uri.fsPath, "target", "debug", binaryName),
-      path.join(workspace.uri.fsPath, "rust", "target", "debug", binaryName)
+      path.join(workspace.uri.fsPath, "target", "release", binaryName),
+      path.join(workspace.uri.fsPath, "rust", "target", "debug", binaryName),
+      path.join(workspace.uri.fsPath, "rust", "target", "release", binaryName)
     ];
     for (const localBinary of localBinaryCandidates) {
       if (await fileExists(localBinary)) {
         return { cwd: workspace.uri.fsPath, command: localBinary, argPrefix: [] };
       }
     }
+  }
+
+  const bundledBinary = await resolveBundledBinary(extensionPath);
+  if (bundledBinary) {
+    return { cwd, command: bundledBinary, argPrefix: [] };
   }
 
   // Prefer a standalone parser from PATH before falling back to cargo.

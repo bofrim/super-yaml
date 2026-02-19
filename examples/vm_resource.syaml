@@ -1,0 +1,97 @@
+---!syaml/v0
+---schema
+CpuCount:
+  type: integer
+  minimum: 1
+  maximum: 128
+MemoryUnit: [MiB, GiB, TiB]
+MemorySpec:
+  type: object
+  properties:
+    amount: integer
+    unit: MemoryUnit
+  constructors:
+    from_text:
+      regex: '^(?<amount>\d+)(?<raw_unit>[A-Za-z]+)$'
+      map:
+        amount:
+          group: amount
+          decode: integer
+        unit:
+          group: raw_unit
+          from_enum: MemoryUnit
+
+DiskSizeUnit: [GB, TB, PB]
+
+DiskSizeSpec:
+  type: object
+  properties:
+    amount: integer
+    unit: DiskSizeUnit
+  constructors:
+    from_text:
+      regex: '^(?<amount>\d+)(?<raw_unit>[A-Za-z]+)$'
+      map:
+        amount:
+          group: amount
+          decode: integer
+        unit:
+          group: raw_unit
+          from_enum: DiskSizeUnit
+Disk:
+  type: object
+  properties:
+    size_gb: integer
+    disk_kind: [ssd, hdd]
+    mount_path: string?
+
+VmNetwork:
+  type: object
+  properties:
+    subnet:
+      type: string
+      pattern: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$'
+    assign_public_ip: boolean
+VmResource:
+  type: object
+  properties:
+    vm_name:
+      type: string
+      pattern: '^[a-z0-9-]+$'
+    image: string
+    region: [us-west-2, us-east-1, eu-west-1]
+    cpu: CpuCount
+    memory: MemorySpec
+    disks:
+      type: object
+      values: Disk
+    network: VmNetwork
+    tags:
+      type: object
+      values: string
+      optional: true
+  constraints:
+    - "memory.amount >= 1"
+
+---data
+resource <VmResource>:
+  vm_name: api-prod-01
+  image: ubuntu-22.04
+  region: us-west-2
+  cpu <CpuCount>: 4
+  memory <MemorySpec>: 16GiB
+  disks:
+    root:
+      size_gb: 120
+      disk_kind: ssd
+      mount_path: /
+    data:
+      size_gb: 512
+      disk_kind: ssd
+      mount_path: /data
+  network:
+    subnet: 10.40.2.0/24
+    assign_public_ip: false
+  tags:
+    env: prod
+    owner: platform

@@ -31,6 +31,8 @@ fn all_examples_compile_to_expected_json() {
         "type_composition",
         "imported_types",
         "typed_dict",
+        "color_constructors",
+        "vm_resource",
     ];
 
     for case in cases {
@@ -58,6 +60,8 @@ fn all_examples_validate_successfully() {
         "type_composition",
         "imported_types",
         "typed_dict",
+        "color_constructors",
+        "vm_resource",
     ];
 
     for case in cases {
