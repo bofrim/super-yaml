@@ -1063,9 +1063,79 @@ function extractTypeNameFromValue(valueText: string): string | undefined {
       valueText
     );
   if (!inlineType) {
+    if (isInlineStringEnumShorthand(valueText)) {
+      return "string";
+    }
     return undefined;
   }
   return inlineType[1] ?? inlineType[3] ?? inlineType[5];
+}
+
+function isInlineStringEnumShorthand(valueText: string): boolean {
+  const trimmed = valueText.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return false;
+  }
+
+  const inner = trimmed.slice(1, -1).trim();
+  if (inner.length === 0) {
+    return true;
+  }
+
+  const items: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | undefined;
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote && inner[i - 1] !== "\\") {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+
+    if (ch === ",") {
+      items.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+  if (quote) {
+    return false;
+  }
+  items.push(current.trim());
+
+  if (items.some((item) => item.length === 0)) {
+    return false;
+  }
+
+  return items.every((item) => isStringLikeEnumItem(item));
+}
+
+function isStringLikeEnumItem(item: string): boolean {
+  if ((item.startsWith('"') && item.endsWith('"')) || (item.startsWith("'") && item.endsWith("'"))) {
+    return item.length >= 2;
+  }
+
+  if (/^(true|false|null)$/i.test(item)) {
+    return false;
+  }
+  if (/^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(item)) {
+    return false;
+  }
+  if (item.startsWith("{") || item.startsWith("[") || item.includes(":")) {
+    return false;
+  }
+  return true;
 }
 
 function inferSchemaTypeFromAncestor(

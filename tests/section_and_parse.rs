@@ -304,6 +304,23 @@ circle <Circle>:
 }
 
 #[test]
+fn validate_document_accepts_schema_property_string_enum_shorthand() {
+    let input = r#"
+---!syaml/v0
+---schema
+DerivedMetricSpec:
+  type: object
+  properties:
+    operator: [ema, derivative, rolling_mean, rolling_var, rolling_min, rolling_max]
+---data
+spec <DerivedMetricSpec>:
+  operator: ema
+"#;
+
+    validate_document(input, &env_provider(&[])).unwrap();
+}
+
+#[test]
 fn validate_document_reports_unknown_schema_type_reference_even_when_unused() {
     let input = r#"
 ---!syaml/v0

@@ -115,6 +115,12 @@ fn validate_schema_type_references_inner(
 
 fn normalize_schema_node(schema: JsonValue) -> JsonValue {
     match schema {
+        JsonValue::Array(values) if values.iter().all(JsonValue::is_string) => {
+            let mut out = serde_json::Map::new();
+            out.insert("type".to_string(), JsonValue::String("string".to_string()));
+            out.insert("enum".to_string(), JsonValue::Array(values));
+            JsonValue::Object(out)
+        }
         JsonValue::String(type_name) => {
             let (normalized_type, optional) = parse_optional_type_marker(&type_name);
             let mut out = serde_json::Map::new();

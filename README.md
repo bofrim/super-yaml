@@ -229,6 +229,26 @@ BoundsConfig:
       type: Port
 ```
 
+String enum properties also support shorthand:
+
+```yaml
+DerivedMetricSpec:
+  type: object
+  properties:
+    operator: [ema, derivative, rolling_mean, rolling_var, rolling_min, rolling_max]
+```
+
+This is equivalent to:
+
+```yaml
+DerivedMetricSpec:
+  type: object
+  properties:
+    operator:
+      type: string
+      enum: [ema, derivative, rolling_mean, rolling_var, rolling_min, rolling_max]
+```
+
 When a schema node combines `type: <NamedType>` with additional keywords,
 both must pass (logical conjunction / `allOf`-like behavior).
 

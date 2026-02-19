@@ -54,6 +54,7 @@ WsMessage:
   properties:
     kind:
       type: MessageKind
+    operator: [ema, derivative, rolling_mean]
     room_id:
       type: string
     payload:
@@ -71,6 +72,7 @@ example: 1
 
     assert!(rendered.contains("pub enum MessageKind"));
     assert!(rendered.contains("pub struct WsMessage"));
+    assert!(rendered.contains("pub operator: String"));
     assert!(rendered.contains("pub room_id: String"));
     assert!(rendered.contains("pub payload: Option<Value>"));
     assert!(rendered.contains("pub type Batch = Vec<WsMessage>;"));

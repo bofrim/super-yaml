@@ -143,6 +143,47 @@ fn parse_schema_normalizes_string_type_shorthand_for_nested_nodes() {
 }
 
 #[test]
+fn parse_schema_normalizes_string_enum_shorthand_for_nested_nodes() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "DerivedMetricSpec": {
+                "type": "object",
+                "properties": {
+                    "operator": ["ema", "derivative", "rolling_mean", "rolling_var", "rolling_min", "rolling_max"]
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        schema.types["DerivedMetricSpec"]["properties"]["operator"]["type"],
+        json!("string")
+    );
+    assert_eq!(
+        schema.types["DerivedMetricSpec"]["properties"]["operator"]["enum"],
+        json!(["ema", "derivative", "rolling_mean", "rolling_var", "rolling_min", "rolling_max"])
+    );
+
+    validate_json_against_schema_with_types(
+        &json!({"operator": "ema"}),
+        schema.types.get("DerivedMetricSpec").unwrap(),
+        "$.spec",
+        &schema.types,
+    )
+    .unwrap();
+
+    let err = validate_json_against_schema_with_types(
+        &json!({"operator": "not_supported"}),
+        schema.types.get("DerivedMetricSpec").unwrap(),
+        "$.spec",
+        &schema.types,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("enum mismatch"));
+}
+
+#[test]
 fn validate_type_hints_accepts_shorthand_property_type_reference() {
     let schema = parse_schema(&json!({
         "types": {

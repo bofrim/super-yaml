@@ -54,6 +54,7 @@ WsMessage:
   properties:
     kind:
       type: MessageKind
+    operator: [ema, derivative, rolling_mean]
     room_id:
       type: string
     payload:
@@ -71,6 +72,7 @@ example: 1
 
     assert!(rendered.contains("export type MessageKind = \"join\" | \"leave\";"));
     assert!(rendered.contains("export interface WsMessage"));
+    assert!(rendered.contains("operator: string;"));
     assert!(rendered.contains("room_id: string;"));
     assert!(rendered.contains("payload?: unknown;"));
     assert!(rendered.contains("export type Batch = Array<WsMessage>;"));
