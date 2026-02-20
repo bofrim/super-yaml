@@ -183,7 +183,7 @@ fn collect_placeholders(value: &JsonValue, out: &mut BTreeSet<String>) {
             }
         }
         JsonValue::String(text) => {
-            if let Some(placeholder) = parse_placeholder(text) {
+            for placeholder in parse_placeholders_in_text(text) {
                 out.insert(placeholder.name);
             }
         }
@@ -218,7 +218,7 @@ fn substitute_placeholders(
         }
         JsonValue::String(text) => {
             let Some(placeholder) = parse_placeholder(text) else {
-                return Ok(value.clone());
+                return substitute_placeholders_in_string(text, vars, path);
             };
 
             if let Some(found) = vars.get(&placeholder.name) {
@@ -241,6 +241,85 @@ fn substitute_placeholders(
             )))
         }
         _ => Ok(value.clone()),
+    }
+}
+
+fn substitute_placeholders_in_string(
+    text: &str,
+    vars: &HashMap<String, JsonValue>,
+    path: &str,
+) -> Result<JsonValue, SyamlError> {
+    let mut rendered = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    let mut found_any = false;
+
+    for captures in placeholder_scan_regex().captures_iter(text) {
+        let Some(full) = captures.get(0) else {
+            continue;
+        };
+        let Some(name_match) = captures.get(1) else {
+            continue;
+        };
+        found_any = true;
+
+        rendered.push_str(&text[cursor..full.start()]);
+
+        let name = name_match.as_str();
+        let default_raw = captures.get(2).map(|m| m.as_str().to_string());
+        let replacement = resolve_placeholder_value(name, default_raw, vars, path)?;
+        rendered.push_str(&replacement);
+
+        cursor = full.end();
+    }
+
+    if !found_any {
+        return Ok(JsonValue::String(text.to_string()));
+    }
+
+    rendered.push_str(&text[cursor..]);
+    Ok(JsonValue::String(rendered))
+}
+
+fn resolve_placeholder_value(
+    name: &str,
+    default_raw: Option<String>,
+    vars: &HashMap<String, JsonValue>,
+    path: &str,
+) -> Result<String, SyamlError> {
+    if let Some(found) = vars.get(name) {
+        return json_value_to_template_string(found, name, path);
+    }
+
+    if let Some(default_raw) = default_raw {
+        let default = crate::mini_yaml::parse_scalar(default_raw.trim()).map_err(|_| {
+            SyamlError::TemplateError(format!(
+                "invalid default value '{}' for template variable '{}' at {}",
+                default_raw, name, path
+            ))
+        })?;
+        return json_value_to_template_string(&default, name, path);
+    }
+
+    Err(SyamlError::TemplateError(format!(
+        "missing required template variable '{}' at {}",
+        name, path
+    )))
+}
+
+fn json_value_to_template_string(
+    value: &JsonValue,
+    placeholder_name: &str,
+    path: &str,
+) -> Result<String, SyamlError> {
+    match value {
+        JsonValue::Null => Ok("null".to_string()),
+        JsonValue::Bool(v) => Ok(v.to_string()),
+        JsonValue::Number(v) => Ok(v.to_string()),
+        JsonValue::String(v) => Ok(v.clone()),
+        JsonValue::Array(_) | JsonValue::Object(_) => Err(SyamlError::TemplateError(format!(
+            "template variable '{}' at {} must be scalar when used inside a larger string",
+            placeholder_name, path
+        ))),
     }
 }
 
@@ -270,6 +349,17 @@ fn parse_placeholder(text: &str) -> Option<Placeholder> {
     Some(Placeholder { name, default_raw })
 }
 
+fn parse_placeholders_in_text(text: &str) -> Vec<Placeholder> {
+    placeholder_scan_regex()
+        .captures_iter(text)
+        .filter_map(|captures| {
+            let name = captures.get(1)?.as_str().to_string();
+            let default_raw = captures.get(2).map(|m| m.as_str().to_string());
+            Some(Placeholder { name, default_raw })
+        })
+        .collect()
+}
+
 fn template_key_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -283,6 +373,14 @@ fn placeholder_regex() -> &'static Regex {
     RE.get_or_init(|| {
         Regex::new(r"^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?::(.*))?\s*\}\}$")
             .expect("valid placeholder regex")
+    })
+}
+
+fn placeholder_scan_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?::(.*?))?\s*\}\}")
+            .expect("valid placeholder scan regex")
     })
 }
 
@@ -332,5 +430,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unexpected template variable 'B'"));
+    }
+
+    #[test]
+    fn interpolates_placeholders_inside_larger_string_values() {
+        let mut data = json!({
+            "_templates": {
+                "deploy": {
+                    "path": "{{DEPLOY_ROOT}}/{{APP_NAME}}",
+                    "unit": "templates/{{APP_NAME}}.service.j2",
+                    "url": "https://{{HOST}}:{{PORT:443}}/health"
+                }
+            },
+            "service": {
+                "{{_templates.deploy}}": {
+                    "DEPLOY_ROOT": "/srv/apps",
+                    "APP_NAME": "api",
+                    "HOST": "api.internal"
+                }
+            }
+        });
+
+        let imports = HashMap::new();
+        expand_data_templates(&mut data, &imports).unwrap();
+        assert_eq!(data["service"]["path"], json!("/srv/apps/api"));
+        assert_eq!(data["service"]["unit"], json!("templates/api.service.j2"));
+        assert_eq!(data["service"]["url"], json!("https://api.internal:443/health"));
     }
 }

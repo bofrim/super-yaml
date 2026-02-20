@@ -3,8 +3,6 @@
 imports:
   tpl: ./template_service_shared.syaml
 
----schema
-{}
 
 ---data
 service <tpl.Service>:
