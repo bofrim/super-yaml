@@ -683,31 +683,31 @@ port <Port>: 5432
         let input = r#"
 ---!syaml/v0
 ---schema
-EpisodeConfig:
+SessionConfig:
   type: object
   properties:
-    initial_population_size:
+    min_attendees:
       type: integer
       constraints:
         - "value >= 1"
         - "value <= 1000000"
-    max_agents:
+    max_attendees:
       type: integer
       constraints: "value >= 1"
   constraints:
-    - "initial_population_size <= max_agents"
+    - "min_attendees <= max_attendees"
 ---data
-episode <EpisodeConfig>:
-  initial_population_size: 3
-  max_agents: 5
+session <SessionConfig>:
+  min_attendees: 3
+  max_attendees: 5
 "#;
 
         let compiled = compile_document(input, &env_provider(&[])).unwrap();
         assert_eq!(
-            compiled.value["episode"]["initial_population_size"],
+            compiled.value["session"]["min_attendees"],
             json!(3)
         );
-        assert_eq!(compiled.value["episode"]["max_agents"], json!(5));
+        assert_eq!(compiled.value["session"]["max_attendees"], json!(5));
     }
 
     #[test]
@@ -715,33 +715,33 @@ episode <EpisodeConfig>:
         let input = r#"
 ---!syaml/v0
 ---schema
-EpisodeConfig:
+SessionConfig:
   type: object
   properties:
-    initial_population_size:
+    min_attendees:
       type: integer
-    max_agents:
+    max_attendees:
       type: integer
   constraints:
-    initial_population_size:
+    min_attendees:
       - "value >= 1"
       - "value <= 1000000"
-    max_agents:
+    max_attendees:
       - "value >= 1"
     $:
-      - "initial_population_size <= max_agents"
+      - "min_attendees <= max_attendees"
 ---data
-episode <EpisodeConfig>:
-  initial_population_size: 3
-  max_agents: 5
+session <SessionConfig>:
+  min_attendees: 3
+  max_attendees: 5
 "#;
 
         let compiled = compile_document(input, &env_provider(&[])).unwrap();
         assert_eq!(
-            compiled.value["episode"]["initial_population_size"],
+            compiled.value["session"]["min_attendees"],
             json!(3)
         );
-        assert_eq!(compiled.value["episode"]["max_agents"], json!(5));
+        assert_eq!(compiled.value["session"]["max_attendees"], json!(5));
     }
 
     #[test]
@@ -749,19 +749,19 @@ episode <EpisodeConfig>:
         let input = r#"
 ---!syaml/v0
 ---schema
-EpisodeConfig:
+SessionConfig:
   type: object
   properties:
-    initial_population_size:
+    min_attendees:
       type: integer
-    max_agents:
+    max_attendees:
       type: integer
   constraints:
-    - "initial_population_size <= max_agents"
+    - "min_attendees <= max_attendees"
 ---data
-episode <EpisodeConfig>:
-  initial_population_size: 6
-  max_agents: 5
+session <SessionConfig>:
+  min_attendees: 6
+  max_attendees: 5
 "#;
 
         let err = compile_document(input, &env_provider(&[])).unwrap_err();

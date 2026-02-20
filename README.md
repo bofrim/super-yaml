@@ -175,13 +175,13 @@ Named types can reference other named types, and additional constraints are appl
 PositiveNumber:
   type: number
   exclusiveMinimum: 0
-StereoVisionEye:
+DisplayProfile:
   type: object
   properties:
-    agent_physical_radius:
+    scale_factor:
       type: PositiveNumber
       maximum: 25
-    baseline:
+    refresh_hz:
       type: PositiveNumber
 ```
 
@@ -341,7 +341,7 @@ Multiple constraints can be specified as a list — all must pass:
 
 ```yaml
 ---schema
-PopulationSize:
+PoolSize:
   type: integer
   constraints:
     - "value >= 1"

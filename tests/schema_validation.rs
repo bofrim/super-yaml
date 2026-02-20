@@ -26,36 +26,36 @@ fn parse_schema_treats_top_level_keys_as_types() {
 fn parse_schema_collects_type_local_constraints() {
     let raw = json!({
         "types": {
-            "EpisodeConfig": {
+            "SessionConfig": {
                 "type": "object",
                 "properties": {
-                    "initial_population_size": {
+                    "min_attendees": {
                         "type": "integer",
                         "constraints": ["value >= 1", "value <= 1000000"]
                     },
-                    "max_agents": {
+                    "max_attendees": {
                         "type": "integer",
                         "constraints": "value >= 1"
                     }
                 },
-                "constraints": ["initial_population_size <= max_agents"]
+                "constraints": ["min_attendees <= max_attendees"]
             }
         }
     });
 
     let schema = parse_schema(&raw).unwrap();
-    let by_type = schema.type_constraints.get("EpisodeConfig").unwrap();
+    let by_type = schema.type_constraints.get("SessionConfig").unwrap();
     assert_eq!(
-        by_type.get("$.initial_population_size").unwrap(),
+        by_type.get("$.min_attendees").unwrap(),
         &vec!["value >= 1".to_string(), "value <= 1000000".to_string()]
     );
     assert_eq!(
-        by_type.get("$.max_agents").unwrap(),
+        by_type.get("$.max_attendees").unwrap(),
         &vec!["value >= 1".to_string()]
     );
     assert_eq!(
         by_type.get("$").unwrap(),
-        &vec!["initial_population_size <= max_agents".to_string()]
+        &vec!["min_attendees <= max_attendees".to_string()]
     );
 }
 
@@ -63,31 +63,31 @@ fn parse_schema_collects_type_local_constraints() {
 fn parse_schema_collects_type_local_constraint_path_map() {
     let raw = json!({
         "types": {
-            "EpisodeConfig": {
+            "SessionConfig": {
                 "type": "object",
                 "properties": {
-                    "initial_population_size": { "type": "integer" },
-                    "max_agents": { "type": "integer" }
+                    "min_attendees": { "type": "integer" },
+                    "max_attendees": { "type": "integer" }
                 },
                 "constraints": {
-                    "initial_population_size": [
+                    "min_attendees": [
                         "value >= 1",
                         "value <= 1000000"
                     ],
-                    "max_agents": "value >= 1"
+                    "max_attendees": "value >= 1"
                 }
             }
         }
     });
 
     let schema = parse_schema(&raw).unwrap();
-    let by_type = schema.type_constraints.get("EpisodeConfig").unwrap();
+    let by_type = schema.type_constraints.get("SessionConfig").unwrap();
     assert_eq!(
-        by_type.get("$.initial_population_size").unwrap(),
+        by_type.get("$.min_attendees").unwrap(),
         &vec!["value >= 1".to_string(), "value <= 1000000".to_string()]
     );
     assert_eq!(
-        by_type.get("$.max_agents").unwrap(),
+        by_type.get("$.max_attendees").unwrap(),
         &vec!["value >= 1".to_string()]
     );
 }
@@ -573,34 +573,34 @@ fn validate_constraints_allows_consistent_numeric_range() {
 fn build_effective_constraints_expands_type_local_paths() {
     let schema = parse_schema(&json!({
         "types": {
-            "EpisodeConfig": {
+            "SessionConfig": {
                 "type": "object",
                 "properties": {
-                    "initial_population_size": {
+                    "min_attendees": {
                         "type": "integer",
                         "constraints": "value >= 1"
                     },
-                    "max_agents": {
+                    "max_attendees": {
                         "type": "integer"
                     }
                 },
-                "constraints": ["initial_population_size <= max_agents"]
+                "constraints": ["min_attendees <= max_attendees"]
             }
         }
     }))
     .unwrap();
 
     let mut hints = BTreeMap::new();
-    hints.insert("$.episode".to_string(), "EpisodeConfig".to_string());
+    hints.insert("$.session".to_string(), "SessionConfig".to_string());
 
     let effective = build_effective_constraints(&hints, &schema);
     assert_eq!(
-        effective.get("$.episode.initial_population_size").unwrap(),
+        effective.get("$.session.min_attendees").unwrap(),
         &vec!["value >= 1".to_string()]
     );
     assert_eq!(
-        effective.get("$.episode").unwrap(),
-        &vec!["initial_population_size <= max_agents".to_string()]
+        effective.get("$.session").unwrap(),
+        &vec!["min_attendees <= max_attendees".to_string()]
     );
 }
 
@@ -645,10 +645,10 @@ fn validate_json_against_schema_with_types_allows_nested_custom_type_reference()
                 "type": "number",
                 "exclusiveMinimum": 0
             },
-            "VisionConfig": {
+            "DisplayConfig": {
                 "type": "object",
                 "properties": {
-                    "agent_physical_radius": {
+                    "scale_factor": {
                         "type": "PositiveNumber"
                     }
                 }
@@ -657,13 +657,13 @@ fn validate_json_against_schema_with_types_allows_nested_custom_type_reference()
     }))
     .unwrap();
 
-    let value = json!({"agent_physical_radius": 10.0});
-    let vision_schema = schema.types.get("VisionConfig").unwrap();
+    let value = json!({"scale_factor": 10.0});
+    let display_schema = schema.types.get("DisplayConfig").unwrap();
 
     validate_json_against_schema_with_types(
         &value,
-        vision_schema,
-        "$.agent.sensors.stereo_vision.eye",
+        display_schema,
+        "$.device.display.monitor",
         &schema.types,
     )
     .unwrap();
@@ -677,10 +677,10 @@ fn validate_json_against_schema_with_types_reports_nested_custom_type_violation(
                 "type": "number",
                 "exclusiveMinimum": 0
             },
-            "VisionConfig": {
+            "DisplayConfig": {
                 "type": "object",
                 "properties": {
-                    "agent_physical_radius": {
+                    "scale_factor": {
                         "type": "PositiveNumber"
                     }
                 }
@@ -689,13 +689,13 @@ fn validate_json_against_schema_with_types_reports_nested_custom_type_violation(
     }))
     .unwrap();
 
-    let value = json!({"agent_physical_radius": 0});
-    let vision_schema = schema.types.get("VisionConfig").unwrap();
+    let value = json!({"scale_factor": 0});
+    let display_schema = schema.types.get("DisplayConfig").unwrap();
 
     let err = validate_json_against_schema_with_types(
         &value,
-        vision_schema,
-        "$.agent.sensors.stereo_vision.eye",
+        display_schema,
+        "$.device.display.monitor",
         &schema.types,
     )
     .unwrap_err();
@@ -924,20 +924,20 @@ fn validate_constraints_can_use_nested_paths() {
 #[test]
 fn validate_constraints_can_use_parent_scope_for_siblings() {
     let data = json!({
-        "episode": {
-            "initial_population_size": 2,
-            "max_agents": 5
+        "session": {
+            "min_attendees": 2,
+            "max_attendees": 5
         }
     });
     let env = BTreeMap::new();
     let mut constraints = BTreeMap::new();
     constraints.insert(
-        "episode.initial_population_size".to_string(),
-        vec!["value <= max_agents".to_string()],
+        "session.min_attendees".to_string(),
+        vec!["value <= max_attendees".to_string()],
     );
     constraints.insert(
-        "episode".to_string(),
-        vec!["initial_population_size <= max_agents".to_string()],
+        "session".to_string(),
+        vec!["min_attendees <= max_attendees".to_string()],
     );
 
     validate_constraints(&data, &env, &constraints).unwrap();

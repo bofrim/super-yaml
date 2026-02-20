@@ -1,4 +1,4 @@
-# Super YAML — LLM Agent Reference
+# Super YAML — Language Reference
 
 You are working with **super_yaml**, a configuration language and toolchain. This document is your complete reference for reading, writing, and integrating `.syaml` files. Follow these rules precisely when generating `.syaml` content.
 
@@ -247,7 +247,7 @@ SmallPositive:
   type: PositiveNumber
   maximum: 100
 
-AgentConfig:
+ServiceConfig:
   type: object
   properties:
     radius:
@@ -316,7 +316,7 @@ ReplicaCount:
   constraints: "value >= 1"
 
 # Multiple constraints (all must pass)
-PopulationSize:
+PoolSize:
   type: integer
   constraints:
     - "value >= 1"
@@ -714,13 +714,13 @@ Given this schema:
 PositiveNumber:
   type: number
   exclusiveMinimum: 0
-StereoVisionEye:
+DisplayProfile:
   type: object
   properties:
-    agent_physical_radius:
+    scale_factor:
       type: PositiveNumber
       maximum: 25
-    baseline:
+    refresh_hz:
       type: PositiveNumber
 ```
 
@@ -732,9 +732,9 @@ use serde::{Deserialize, Serialize};
 pub type PositiveNumber = f64;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StereoVisionEye {
-    pub agent_physical_radius: PositiveNumber,
-    pub baseline: PositiveNumber,
+pub struct DisplayProfile {
+    pub scale_factor: PositiveNumber,
+    pub refresh_hz: PositiveNumber,
 }
 ```
 
@@ -747,9 +747,9 @@ Richer schemas produce richer output. Enums become Rust enums with serde rename 
 ```typescript
 export type PositiveNumber = number;
 
-export interface StereoVisionEye {
-  agent_physical_radius: PositiveNumber;
-  baseline: PositiveNumber;
+export interface DisplayProfile {
+  scale_factor: PositiveNumber;
+  refresh_hz: PositiveNumber;
 }
 ```
 

@@ -1,12 +1,1 @@
-{
-  "agent": {
-    "sensors": {
-      "stereo_vision": {
-        "eye": {
-          "agent_physical_radius": 10.0,
-          "baseline": 0.4
-        }
-      }
-    }
-  }
-}
+{"device":{"display":{"monitor":{"scale_factor":10.0,"refresh_hz":0.4}}}}

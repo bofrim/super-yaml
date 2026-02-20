@@ -3,19 +3,18 @@
 PositiveNumber:
   type: number
   exclusiveMinimum: 0
-StereoVisionEye:
+DisplayProfile:
   type: object
   properties:
-    agent_physical_radius:
+    scale_factor:
       type: PositiveNumber
       maximum: 25
-    baseline:
+    refresh_hz:
       type: PositiveNumber
 
 ---data
-agent:
-  sensors:
-    stereo_vision:
-      eye <StereoVisionEye>:
-        agent_physical_radius: 10.0
-        baseline: 0.4
+device:
+  display:
+    monitor <DisplayProfile>:
+      scale_factor: 10.0
+      refresh_hz: 0.4
