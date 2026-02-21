@@ -325,7 +325,9 @@ fn render_type_definition(
         return format!("export type {ts_name} = unknown;");
     };
 
-    let mut out = if let Some(variants) = collect_string_enum_variants(schema_obj) {
+    let mut out = if is_union_schema(schema_obj) {
+        render_union_alias(&ts_name, schema_obj, state)
+    } else if let Some(variants) = collect_string_enum_variants(schema_obj) {
         render_string_enum_alias(&ts_name, &variants)
     } else if is_object_schema(schema_obj) {
         if let Some(properties) = schema_obj.get("properties").and_then(JsonValue::as_object) {
@@ -511,6 +513,30 @@ fn render_constraint_runtime_helpers() -> String {
     .to_string()
 }
 
+fn is_union_schema(schema_obj: &JsonMap<String, JsonValue>) -> bool {
+    schema_obj.get("type").and_then(JsonValue::as_str) == Some("union")
+}
+
+fn render_union_alias(
+    name: &str,
+    schema_obj: &JsonMap<String, JsonValue>,
+    state: &mut RenderState,
+) -> String {
+    let option_types: Vec<String> = match schema_obj.get("options") {
+        Some(JsonValue::Array(items)) => items
+            .iter()
+            .map(|opt_schema| ts_type_for_schema(opt_schema, state))
+            .collect(),
+        Some(JsonValue::Object(opt_map)) => opt_map
+            .values()
+            .map(|opt_schema| ts_type_for_schema(opt_schema, state))
+            .collect(),
+        _ => vec!["unknown".to_string()],
+    };
+
+    format!("export type {name} = {};", option_types.join(" | "))
+}
+
 fn collect_string_enum_variants(schema_obj: &JsonMap<String, JsonValue>) -> Option<Vec<String>> {
     let values = schema_obj.get("enum")?.as_array()?;
     if values.is_empty() {
@@ -658,6 +684,7 @@ fn ts_type_for_type_name(
                 "unknown".to_string()
             }
         }
+        "union" => "unknown".to_string(),
         other => state
             .type_names
             .get(other)

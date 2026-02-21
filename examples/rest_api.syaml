@@ -1,0 +1,56 @@
+---!syaml/v0
+---schema
+ErrorDetail:
+  type: object
+  properties:
+    code: integer
+    message: string
+
+SuccessPayload:
+  type: object
+  properties:
+    id: string
+    created: boolean
+
+ApiResponse:
+  type: union
+  tag: status
+  tag_required: true
+  options:
+    ok:
+      type: object
+      properties:
+        status: string
+        data: SuccessPayload
+    error:
+      type: object
+      properties:
+        status: string
+        error: ErrorDetail
+
+FlexibleInput:
+  type: union
+  options:
+    - string
+    - 
+      type: object
+      properties:
+        query: string
+        page: "integer?"
+
+EndpointResult: SuccessPayload | ErrorDetail
+
+---data
+api:
+  response <ApiResponse>:
+    status: ok
+    data:
+      id: abc-123
+      created: true
+  flexible_input <FlexibleInput>:
+    query: search term
+    page: 2
+  quick_input <FlexibleInput>: just a string
+  result_ref <EndpointResult>:
+    code: 404
+    message: not found

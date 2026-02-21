@@ -1,0 +1,1 @@
+{"api":{"flexible_input":{"page":2,"query":"search term"},"quick_input":"just a string","response":{"data":{"created":true,"id":"abc-123"},"status":"ok"},"result_ref":{"code":404,"message":"not found"}}}

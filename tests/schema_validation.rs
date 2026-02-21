@@ -1464,3 +1464,349 @@ fn validate_schema_type_references_rejects_constructor_from_enum_unknown_type() 
     assert!(err.to_string().contains("unknown type reference"));
     assert!(err.to_string().contains("MissingEnum"));
 }
+
+// --- Union type tests ---
+
+#[test]
+fn parse_schema_normalizes_pipe_shorthand_to_union() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "FlexValue": "string | integer | boolean"
+        }
+    }))
+    .unwrap();
+
+    let flex = &schema.types["FlexValue"];
+    assert_eq!(flex["type"], json!("union"));
+    let options = flex["options"].as_array().unwrap();
+    assert_eq!(options.len(), 3);
+    assert_eq!(options[0]["type"], json!("string"));
+    assert_eq!(options[1]["type"], json!("integer"));
+    assert_eq!(options[2]["type"], json!("boolean"));
+}
+
+#[test]
+fn validate_union_list_based_first_match_wins() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "FlexValue": {
+                "type": "union",
+                "options": [
+                    {"type": "integer"},
+                    {"type": "string"}
+                ]
+            }
+        }
+    }))
+    .unwrap();
+
+    // Integer matches first option.
+    validate_json_against_schema_with_types(
+        &json!(42),
+        schema.types.get("FlexValue").unwrap(),
+        "$.val",
+        &schema.types,
+    )
+    .unwrap();
+
+    // String matches second option.
+    validate_json_against_schema_with_types(
+        &json!("hello"),
+        schema.types.get("FlexValue").unwrap(),
+        "$.val",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_union_tagged_dispatch() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "ApiResponse": {
+                "type": "union",
+                "tag": "status",
+                "options": {
+                    "ok": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string"},
+                            "data": {"type": "string"}
+                        }
+                    },
+                    "error": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string"},
+                            "message": {"type": "string"}
+                        }
+                    }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    // Tag "ok" dispatches to success option.
+    validate_json_against_schema_with_types(
+        &json!({"status": "ok", "data": "result"}),
+        schema.types.get("ApiResponse").unwrap(),
+        "$.resp",
+        &schema.types,
+    )
+    .unwrap();
+
+    // Tag "error" dispatches to error option.
+    validate_json_against_schema_with_types(
+        &json!({"status": "error", "message": "fail"}),
+        schema.types.get("ApiResponse").unwrap(),
+        "$.resp",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_union_tag_required_missing_tag() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Tagged": {
+                "type": "union",
+                "tag": "kind",
+                "tag_required": true,
+                "options": {
+                    "a": {"type": "object", "properties": {"kind": {"type": "string"}}}
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_json_against_schema_with_types(
+        &json!({"other": 1}),
+        schema.types.get("Tagged").unwrap(),
+        "$.item",
+        &schema.types,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("tag field 'kind' is required"));
+}
+
+#[test]
+fn validate_union_tag_required_non_object() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Tagged": {
+                "type": "union",
+                "tag": "kind",
+                "tag_required": true,
+                "options": {
+                    "a": {"type": "object", "properties": {"kind": {"type": "string"}}}
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_json_against_schema_with_types(
+        &json!("just a string"),
+        schema.types.get("Tagged").unwrap(),
+        "$.item",
+        &schema.types,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("tag field 'kind' is required"));
+}
+
+#[test]
+fn validate_union_no_match_error() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "StrictUnion": {
+                "type": "union",
+                "options": [
+                    {"type": "integer"},
+                    {"type": "boolean"}
+                ]
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_json_against_schema_with_types(
+        &json!("string value"),
+        schema.types.get("StrictUnion").unwrap(),
+        "$.val",
+        &schema.types,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("union mismatch"));
+    assert!(err.to_string().contains("did not match any option"));
+}
+
+#[test]
+fn validate_union_as_property_type() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Config": {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": "union",
+                        "options": [
+                            {"type": "string"},
+                            {"type": "integer"}
+                        ]
+                    }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_json_against_schema_with_types(
+        &json!({"value": "hello"}),
+        schema.types.get("Config").unwrap(),
+        "$.cfg",
+        &schema.types,
+    )
+    .unwrap();
+
+    validate_json_against_schema_with_types(
+        &json!({"value": 42}),
+        schema.types.get("Config").unwrap(),
+        "$.cfg",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_union_as_array_item_type() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "MixedList": {
+                "type": "array",
+                "items": {
+                    "type": "union",
+                    "options": [
+                        {"type": "string"},
+                        {"type": "integer"}
+                    ]
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_json_against_schema_with_types(
+        &json!(["hello", 42, "world"]),
+        schema.types.get("MixedList").unwrap(),
+        "$.list",
+        &schema.types,
+    )
+    .unwrap();
+
+    let err = validate_json_against_schema_with_types(
+        &json!(["hello", true]),
+        schema.types.get("MixedList").unwrap(),
+        "$.list",
+        &schema.types,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("union mismatch"));
+}
+
+#[test]
+fn validate_union_missing_options_error() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Bad": {
+                "type": "union"
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_json_against_schema_with_types(
+        &json!(1),
+        schema.types.get("Bad").unwrap(),
+        "$.val",
+        &schema.types,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("requires 'options'"));
+}
+
+#[test]
+fn validate_union_with_named_type_references() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "Hostname": {"type": "string", "minLength": 1},
+            "Target": {
+                "type": "union",
+                "options": [
+                    {"type": "Port"},
+                    {"type": "Hostname"}
+                ]
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_json_against_schema_with_types(
+        &json!(8080),
+        schema.types.get("Target").unwrap(),
+        "$.target",
+        &schema.types,
+    )
+    .unwrap();
+
+    validate_json_against_schema_with_types(
+        &json!("localhost"),
+        schema.types.get("Target").unwrap(),
+        "$.target",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_schema_type_references_accepts_union_type() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Port": {"type": "integer"},
+            "MyUnion": {
+                "type": "union",
+                "options": [
+                    {"type": "Port"},
+                    {"type": "string"}
+                ]
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_schema_type_references(&schema.types).unwrap();
+}
+
+#[test]
+fn parse_schema_normalizes_pipe_shorthand_with_named_types() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "Port": {"type": "integer"},
+            "Hostname": {"type": "string"},
+            "Target": "Port | Hostname"
+        }
+    }))
+    .unwrap();
+
+    let target = &schema.types["Target"];
+    assert_eq!(target["type"], json!("union"));
+    let options = target["options"].as_array().unwrap();
+    assert_eq!(options[0]["type"], json!("Port"));
+    assert_eq!(options[1]["type"], json!("Hostname"));
+
+    validate_schema_type_references(&schema.types).unwrap();
+}

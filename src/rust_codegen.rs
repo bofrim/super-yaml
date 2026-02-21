@@ -280,7 +280,10 @@ fn render_type_definition(
         return format!("pub type {rust_name} = Value;\n");
     };
 
-    let mut out = if let Some(variants) = collect_string_enum_variants(schema_obj) {
+    let mut out = if is_union_schema(schema_obj) {
+        state.needs_serde_derives = true;
+        render_union_enum(&rust_name, schema_obj, state)
+    } else if let Some(variants) = collect_string_enum_variants(schema_obj) {
         state.needs_serde_derives = true;
         render_string_enum(&rust_name, &variants)
     } else if is_object_schema(schema_obj) {
@@ -379,6 +382,70 @@ fn render_constraint_runtime_helpers() -> String {
         "}\n",
     )
     .to_string()
+}
+
+fn is_union_schema(schema_obj: &JsonMap<String, JsonValue>) -> bool {
+    schema_obj.get("type").and_then(JsonValue::as_str) == Some("union")
+}
+
+fn render_union_enum(
+    name: &str,
+    schema_obj: &JsonMap<String, JsonValue>,
+    state: &mut RenderState,
+) -> String {
+    let mut out = String::new();
+    out.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    out.push_str("#[serde(untagged)]\n");
+    out.push_str(&format!("pub enum {name} {{\n"));
+
+    let mut used = HashSet::new();
+
+    match schema_obj.get("options") {
+        Some(JsonValue::Object(opt_map)) => {
+            for (key, opt_schema) in opt_map {
+                let variant_name = sanitize_variant_name(key, "Variant");
+                let unique_variant = unique_identifier(&variant_name, &mut used);
+                let rust_type = rust_type_for_schema(opt_schema, state);
+                out.push_str(&format!("    {unique_variant}({rust_type}),\n"));
+            }
+        }
+        Some(JsonValue::Array(items)) => {
+            for (idx, opt_schema) in items.iter().enumerate() {
+                let variant_name = infer_union_variant_name(opt_schema, idx, state);
+                let unique_variant = unique_identifier(&variant_name, &mut used);
+                let rust_type = rust_type_for_schema(opt_schema, state);
+                out.push_str(&format!("    {unique_variant}({rust_type}),\n"));
+            }
+        }
+        _ => {
+            state.needs_serde_json_value = true;
+            out.push_str("    Unknown(Value),\n");
+        }
+    }
+
+    out.push_str("}\n");
+    out
+}
+
+fn infer_union_variant_name(
+    schema: &JsonValue,
+    index: usize,
+    state: &RenderState,
+) -> String {
+    if let Some(type_name) = schema
+        .as_object()
+        .and_then(|obj| obj.get("type"))
+        .and_then(JsonValue::as_str)
+    {
+        if let Some(mapped) = state.type_names.get(type_name) {
+            return mapped.clone();
+        }
+        let pascal = sanitize_type_name(type_name, "Variant");
+        if !pascal.is_empty() {
+            return pascal;
+        }
+    }
+    format!("Variant{}", index + 1)
 }
 
 fn collect_string_enum_variants(schema_obj: &JsonMap<String, JsonValue>) -> Option<Vec<String>> {
@@ -557,6 +624,10 @@ fn rust_type_for_type_name(
                 state.needs_serde_json_value = true;
                 "Value".to_string()
             }
+        }
+        "union" => {
+            state.needs_serde_json_value = true;
+            "Value".to_string()
         }
         other => {
             if let Some(mapped) = state.type_names.get(other) {

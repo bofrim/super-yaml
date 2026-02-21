@@ -95,7 +95,10 @@ fn validate_schema_type_references_inner(
                             "schema 'type' at {child_path} must be a string"
                         ))
                     })?;
-                    if !is_builtin_type_name(type_name) && !types.contains_key(type_name) {
+                    if type_name != "union"
+                        && !is_builtin_type_name(type_name)
+                        && !types.contains_key(type_name)
+                    {
                         return Err(SyamlError::SchemaError(format!(
                             "unknown type reference at {child_path}: '{type_name}' not found in schema"
                         )));
@@ -125,6 +128,21 @@ fn normalize_schema_node(schema: JsonValue) -> JsonValue {
             JsonValue::Object(out)
         }
         JsonValue::String(type_name) => {
+            // Pipe shorthand: "TypeA | TypeB | TypeC" expands to a union.
+            if type_name.contains(" | ") {
+                let options: Vec<JsonValue> = type_name
+                    .split(" | ")
+                    .map(|part| {
+                        let trimmed = part.trim();
+                        normalize_schema_node(JsonValue::String(trimmed.to_string()))
+                    })
+                    .collect();
+                let mut out = serde_json::Map::new();
+                out.insert("type".to_string(), JsonValue::String("union".to_string()));
+                out.insert("options".to_string(), JsonValue::Array(options));
+                return JsonValue::Object(out);
+            }
+
             let (normalized_type, optional) = parse_optional_type_marker(&type_name);
             let mut out = serde_json::Map::new();
             out.insert(
@@ -166,6 +184,27 @@ fn normalize_schema_node(schema: JsonValue) -> JsonValue {
             if let Some(values) = map.get_mut("values") {
                 let normalized = normalize_schema_node(values.clone());
                 *values = normalized;
+            }
+
+            // Normalize union options (array or map values).
+            if map.get("type").and_then(JsonValue::as_str) == Some("union") {
+                if let Some(options) = map.get_mut("options") {
+                    match options {
+                        JsonValue::Array(items) => {
+                            for item in items.iter_mut() {
+                                let normalized = normalize_schema_node(item.clone());
+                                *item = normalized;
+                            }
+                        }
+                        JsonValue::Object(opt_map) => {
+                            for opt_schema in opt_map.values_mut() {
+                                let normalized = normalize_schema_node(opt_schema.clone());
+                                *opt_schema = normalized;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
 
             JsonValue::Object(map)
@@ -401,6 +440,23 @@ fn collect_type_constraints(
         }
     }
 
+    // Recurse into union options.
+    if let Some(options) = schema_obj.get("options") {
+        match options {
+            JsonValue::Array(items) => {
+                for item in items {
+                    collect_type_constraints(item, current_path, type_name, out)?;
+                }
+            }
+            JsonValue::Object(opt_map) => {
+                for opt_schema in opt_map.values() {
+                    collect_type_constraints(opt_schema, current_path, type_name, out)?;
+                }
+            }
+            _ => {}
+        }
+    }
+
     Ok(())
 }
 
@@ -625,7 +681,7 @@ fn dereference_named_schema<'a>(
         let Some(type_name) = obj.get("type").and_then(JsonValue::as_str) else {
             return Some(node);
         };
-        if is_builtin_type_name(type_name) {
+        if is_builtin_type_name(type_name) || type_name == "union" {
             return Some(node);
         }
         let Some(next) = types.get(type_name) else {
@@ -743,6 +799,9 @@ fn validate_json_against_schema_inner(
         let type_name = type_value.as_str().ok_or_else(|| {
             SyamlError::SchemaError(format!("schema 'type' at {path} must be a string"))
         })?;
+        if type_name == "union" {
+            return validate_union_type(value, schema_obj, path, depth, ctx);
+        }
         if is_builtin_type_name(type_name) {
             if !json_matches_type(value, type_name) {
                 return Err(SyamlError::SchemaError(format!(
@@ -800,6 +859,80 @@ fn validate_named_type_reference(
     let result = validate_json_against_schema_inner(value, referenced_schema, path, depth + 1, ctx);
     ctx.type_stack.pop();
     result
+}
+
+fn validate_union_type(
+    value: &JsonValue,
+    schema_obj: &serde_json::Map<String, JsonValue>,
+    path: &str,
+    depth: usize,
+    ctx: &mut SchemaValidationContext<'_>,
+) -> Result<(), SyamlError> {
+    let options = schema_obj.get("options").ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "union type at {path} requires 'options' (array or object)"
+        ))
+    })?;
+
+    let tag_key = schema_obj.get("tag").and_then(JsonValue::as_str);
+    let tag_required = schema_obj
+        .get("tag_required")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+
+    // If tag dispatch is configured, try tag-based lookup first.
+    if let Some(tag) = tag_key {
+        if let Some(data_obj) = value.as_object() {
+            if let Some(tag_value) = data_obj.get(tag).and_then(JsonValue::as_str) {
+                // Map-based options: look up by key.
+                if let Some(opt_map) = options.as_object() {
+                    if let Some(matched_schema) = opt_map.get(tag_value) {
+                        return validate_json_against_schema_inner(
+                            value,
+                            matched_schema,
+                            path,
+                            depth + 1,
+                            ctx,
+                        );
+                    }
+                }
+            } else if tag_required {
+                return Err(SyamlError::SchemaError(format!(
+                    "union tag field '{}' is required but missing or not a string at {path}",
+                    tag
+                )));
+            }
+        } else if tag_required {
+            return Err(SyamlError::SchemaError(format!(
+                "union tag field '{}' is required but value at {path} is not an object",
+                tag
+            )));
+        }
+    }
+
+    // Ordered matching: try each option, first success wins.
+    let option_schemas: Vec<&JsonValue> = match options {
+        JsonValue::Array(items) => items.iter().collect(),
+        JsonValue::Object(map) => map.values().collect(),
+        _ => {
+            return Err(SyamlError::SchemaError(format!(
+                "union 'options' at {path} must be an array or object"
+            )));
+        }
+    };
+
+    let mut errors = Vec::new();
+    for option_schema in &option_schemas {
+        match validate_json_against_schema_inner(value, option_schema, path, depth + 1, ctx) {
+            Ok(()) => return Ok(()),
+            Err(e) => errors.push(e.to_string()),
+        }
+    }
+
+    Err(SyamlError::SchemaError(format!(
+        "union mismatch at {path}: value did not match any option. Errors: [{}]",
+        errors.join("; ")
+    )))
 }
 
 fn validate_numeric_keywords(

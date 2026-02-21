@@ -228,6 +228,11 @@ fn descend_schema_for_segment(
         ))
     })?;
 
+    // Union types cannot be statically descended — we don't know which option applies.
+    if schema_obj.get("type").and_then(JsonValue::as_str) == Some("union") {
+        return Ok(SegmentLookup::Unspecified);
+    }
+
     let local_result = match segment {
         HintPathSegment::Key(key) => {
             if let Some(props_json) = schema_obj.get("properties") {

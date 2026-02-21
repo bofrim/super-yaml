@@ -34,6 +34,7 @@ fn all_examples_compile_to_expected_json() {
         "color_constructors",
         "vm_resource",
         "template_service",
+        "rest_api",
     ];
 
     for case in cases {
@@ -64,6 +65,7 @@ fn all_examples_validate_successfully() {
         "color_constructors",
         "vm_resource",
         "template_service",
+        "rest_api",
     ];
 
     for case in cases {
