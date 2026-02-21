@@ -1,0 +1,11 @@
+---!syaml/v0
+---meta
+file:
+  version: "1.0.0"
+---schema
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+---data
+default_port <Port>: 3000

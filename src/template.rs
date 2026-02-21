@@ -3,6 +3,7 @@
 //! Supports:
 //! - Template invocation keys: `{{namespace.path.to.template}}`
 //! - Placeholder values inside template definitions: `{{VAR}}` or `{{VAR:default}}`
+//! - Locked template fields: keys ending with `!` (e.g. `name!:`) cannot be overridden by siblings
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
@@ -52,6 +53,7 @@ fn expand_value(
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
 
+                let locked_keys = collect_locked_keys(template_source);
                 let filled = substitute_placeholders(template_source, &vars, path)?;
 
                 if siblings.is_empty() {
@@ -67,6 +69,12 @@ fn expand_value(
                         }
                     };
                     for (k, v) in siblings {
+                        if locked_keys.contains(&k) {
+                            return Err(SyamlError::TemplateError(format!(
+                                "sibling key '{}' at {} conflicts with locked template field",
+                                k, path
+                            )));
+                        }
                         merged.insert(k, v);
                     }
                     *value = JsonValue::Object(merged);
@@ -209,6 +217,18 @@ fn collect_placeholders(value: &JsonValue, out: &mut BTreeSet<String>) {
     }
 }
 
+fn collect_locked_keys(value: &JsonValue) -> BTreeSet<String> {
+    let mut locked = BTreeSet::new();
+    if let Some(map) = value.as_object() {
+        for key in map.keys() {
+            if let Some(base) = key.strip_suffix('!') {
+                locked.insert(base.to_string());
+            }
+        }
+    }
+    locked
+}
+
 fn substitute_placeholders(
     value: &JsonValue,
     vars: &HashMap<String, JsonValue>,
@@ -218,9 +238,10 @@ fn substitute_placeholders(
         JsonValue::Object(map) => {
             let mut out = JsonMap::new();
             for (key, child) in map {
-                let child_path = format!("{}.{}", path, key);
+                let clean_key = key.strip_suffix('!').unwrap_or(key);
+                let child_path = format!("{}.{}", path, clean_key);
                 out.insert(
-                    key.clone(),
+                    clean_key.to_string(),
                     substitute_placeholders(child, vars, &child_path)?,
                 );
             }
@@ -522,6 +543,80 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("must expand to an object when used alongside sibling keys"));
+    }
+
+    #[test]
+    fn locked_field_strips_suffix_from_output() {
+        let mut data = json!({
+            "_templates": {
+                "base": {
+                    "name!": "{{NAME}}",
+                    "port": "{{PORT:8080}}"
+                }
+            },
+            "service": {
+                "{{_templates.base}}": {
+                    "NAME": "api"
+                }
+            }
+        });
+
+        let imports = HashMap::new();
+        expand_data_templates(&mut data, &imports).unwrap();
+        assert_eq!(data["service"]["name"], json!("api"));
+        assert_eq!(data["service"]["port"], json!(8080));
+        assert!(data["service"].get("name!").is_none());
+    }
+
+    #[test]
+    fn locked_field_blocks_sibling_override() {
+        let mut data = json!({
+            "_templates": {
+                "base": {
+                    "name!": "{{NAME}}",
+                    "port": "{{PORT:8080}}"
+                }
+            },
+            "service": {
+                "{{_templates.base}}": {
+                    "NAME": "api"
+                },
+                "name": "override-attempt",
+                "port": 9090
+            }
+        });
+
+        let imports = HashMap::new();
+        let err = expand_data_templates(&mut data, &imports)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("conflicts with locked template field"));
+        assert!(err.contains("'name'"));
+    }
+
+    #[test]
+    fn unlocked_field_allows_override_alongside_locked() {
+        let mut data = json!({
+            "_templates": {
+                "base": {
+                    "name!": "{{NAME}}",
+                    "port": "{{PORT:8080}}",
+                    "tls": "{{TLS:false}}"
+                }
+            },
+            "service": {
+                "{{_templates.base}}": {
+                    "NAME": "api"
+                },
+                "port": 9090
+            }
+        });
+
+        let imports = HashMap::new();
+        expand_data_templates(&mut data, &imports).unwrap();
+        assert_eq!(data["service"]["name"], json!("api"));
+        assert_eq!(data["service"]["port"], json!(9090));
+        assert_eq!(data["service"]["tls"], json!(false));
     }
 
     #[test]

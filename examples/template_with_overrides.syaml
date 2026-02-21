@@ -23,7 +23,7 @@ Booking:
 _templates:
   booking:
     name: "{{NAME}}"
-    seat_limit: 100
+    seat_limit!: 100
     requested_seats: "{{REQUESTED_SEATS}}"
     vip: false
 

@@ -607,11 +607,27 @@ This resolves to:
 }
 ```
 
+#### Locked template fields
+
+Append `!` to a key name in the template definition to prevent sibling keys from overriding it:
+
+```yaml
+---data
+_templates:
+  service:
+    name!: "{{NAME}}"
+    host!: "{{HOST}}"
+    port: "{{PORT:8080}}"
+    tls: "{{TLS:false}}"
+```
+
+With this template, `port` and `tls` can be overridden by siblings, but attempting to override `name` or `host` produces an error. The `!` suffix is stripped from the output key name.
+
 Rules:
 
 - All required variables must be provided. Unknown variables are rejected.
 - When sibling keys are present, the template must expand to an object (not a scalar or array).
-- Sibling keys override template output when names conflict.
+- Sibling keys override template output when names conflict, unless the field is locked (`!`).
 - Only one template invocation is allowed per object.
 - After template expansion, type hints and constraints are validated.
 
@@ -673,13 +689,107 @@ proxy_port <shared.Port>: "=shared.defaults.port + 100"
 all_defaults: shared.defaults
 ```
 
+### URL imports
+
+Import paths can be HTTP or HTTPS URLs. Downloaded content is cached to disk and tracked
+in a `syaml.lock` lockfile next to the root file.
+
+```yaml
+---meta
+imports:
+  base: https://example.com/schemas/base.syaml
+```
+
+Sub-imports from URL-sourced files resolve relative paths as relative URLs.
+
+CLI flags:
+- `--update-imports` &mdash; force re-fetch of all URL imports (bypass lockfile cache).
+- `--cache-dir <path>` &mdash; override the default cache directory (`$SYAML_CACHE_DIR` or `~/.cache/super_yaml/`).
+
+### Hash verification
+
+Pin an import to an exact content hash so any modification is caught before compilation.
+Only `sha256` is supported. The format is `sha256:<hex_digest>`.
+
+```yaml
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+### Signature verification
+
+Verify that an import's content was signed by a trusted Ed25519 key.
+
+```yaml
+---meta
+imports:
+  trusted:
+    path: https://corp.dev/schemas/base.syaml
+    signature:
+      public_key: ./keys/corp.pub
+      value: base64-encoded-detached-signature==
+```
+
+- `public_key` &mdash; path to a raw 32-byte or PEM-encoded Ed25519 public key.
+- `value` &mdash; base64-encoded detached Ed25519 signature over the raw file bytes.
+
+### Version pinning
+
+Require that an imported file declares a semver version that satisfies a requirement.
+The imported file advertises its version in `meta.file.version`.
+
+Imported file:
+
+```yaml
+---!syaml/v0
+---meta
+file:
+  version: "1.2.3"
+---schema
+...
+```
+
+Importing file:
+
+```yaml
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    version: "^1.0.0"
+```
+
+Standard semver requirement syntax is supported (`^`, `~`, `>=`, `<`, etc.).
+
+### Combining verification options
+
+All three options are independent and composable:
+
+```yaml
+---meta
+imports:
+  trusted:
+    path: https://corp.dev/schemas/base.syaml
+    hash: sha256:deadbeef...
+    signature:
+      public_key: ./keys/corp.pub
+      value: base64-sig==
+    version: ">=2.0.0, <3.0.0"
+```
+
 ### Import rules
 
 - Each imported file runs its own full compilation pipeline.
 - Private keys (`_`-prefixed) in imported files are not accessible.
 - Cyclic imports are detected and produce an error.
-- Paths are relative to the importing file's directory.
+- Local paths are relative to the importing file's directory.
+- URL paths resolve relative sub-imports as relative URLs.
 - Schema types must be referenced with the alias prefix (`shared.Port`, not `Port`).
+- Hash and signature are verified on the raw file bytes before any parsing.
+- Version is checked after compilation against `meta.file.version`.
 
 ---
 
@@ -1257,4 +1367,10 @@ template_with_overrides <TypeName>:        # Template with sibling overrides
   {{path.to.template}}:
     VAR: value
   extra_key: extra_value                   # Merged; overrides template on conflict
+
+# In template definitions:
+_templates:
+  example:
+    locked_field!: value                   # Cannot be overridden by siblings
+    open_field: value                      # Can be overridden by siblings
 ```

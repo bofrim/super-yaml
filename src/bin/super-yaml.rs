@@ -1,8 +1,9 @@
 use std::{collections::HashSet, env, path::PathBuf, process::ExitCode};
 
 use super_yaml::{
-    compile_document_from_path, generate_rust_types_from_path, generate_typescript_types_from_path,
-    validate_document_from_path, EnvProvider, ProcessEnvProvider,
+    compile_document_from_path_with_fetch, generate_rust_types_from_path,
+    generate_typescript_types_from_path, validate_document_from_path, EnvProvider,
+    ProcessEnvProvider,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -18,6 +19,8 @@ struct CompileOptions {
     pretty: bool,
     format: OutputFormat,
     allowed_env_keys: HashSet<String>,
+    cache_dir: Option<PathBuf>,
+    update_imports: bool,
 }
 
 /// Env provider that allows only explicitly listed process env keys.
@@ -73,7 +76,14 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "compile" => {
             let options = parse_compile_options(&args[3..])?;
             let env_provider = AllowListEnvProvider::new(options.allowed_env_keys);
-            run_compile(&file, &env_provider, options.pretty, options.format)
+            run_compile(
+                &file,
+                &env_provider,
+                options.pretty,
+                options.format,
+                options.cache_dir,
+                options.update_imports,
+            )
         }
         _ => Err(format!("unknown command '{command}'")),
     }
@@ -90,14 +100,18 @@ fn run_compile(
     env: &dyn EnvProvider,
     pretty: bool,
     format: OutputFormat,
+    cache_dir: Option<PathBuf>,
+    update_imports: bool,
 ) -> Result<(), String> {
     let output = match format {
-        OutputFormat::Json => compile_document_from_path(file, env)
+        OutputFormat::Json => compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
             .map_err(|e| e.to_string())?
             .to_json_string(pretty),
-        OutputFormat::Yaml => Ok(compile_document_from_path(file, env)
-            .map_err(|e| e.to_string())?
-            .to_yaml_string()),
+        OutputFormat::Yaml => Ok(
+            compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
+                .map_err(|e| e.to_string())?
+                .to_yaml_string(),
+        ),
         OutputFormat::Rust => generate_rust_types_from_path(file),
         OutputFormat::TypeScript => generate_typescript_types_from_path(file),
     }
@@ -123,6 +137,8 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
     let mut pretty = false;
     let mut format = OutputFormat::Json;
     let mut allowed_env_keys = HashSet::new();
+    let mut cache_dir: Option<PathBuf> = None;
+    let mut update_imports = false;
     let mut i = 0usize;
 
     while i < args.len() {
@@ -168,6 +184,17 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 i += 2;
             }
             "--allow-env" => parse_allow_env_option(args, &mut i, &mut allowed_env_keys)?,
+            "--update-imports" => {
+                update_imports = true;
+                i += 1;
+            }
+            "--cache-dir" => {
+                if i + 1 >= args.len() {
+                    return Err("missing value for --cache-dir".to_string());
+                }
+                cache_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
             other => {
                 return Err(format!("unknown option '{other}'"));
             }
@@ -178,6 +205,8 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
         pretty,
         format,
         allowed_env_keys,
+        cache_dir,
+        update_imports,
     })
 }
 
@@ -209,6 +238,11 @@ fn print_usage() {
         "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript] [--allow-env KEY]..."
     );
     eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts] [--allow-env KEY]...");
+    eprintln!();
+    eprintln!("import options:");
+    eprintln!("  --update-imports       force re-fetch of all URL imports (bypass lockfile cache)");
+    eprintln!("  --cache-dir <path>     override default URL import cache directory");
+    eprintln!();
     eprintln!(
         "note: environment access is disabled by default; use --allow-env to permit specific keys."
     );

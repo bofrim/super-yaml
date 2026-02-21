@@ -1,0 +1,11 @@
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./verified_import_shared.syaml
+    hash: sha256:3f3594242aef38ea555f6dafacd6ca90b77b2ae7eb7f4e0eba551eaf37263cb5
+    version: "^1.0.0"
+---schema
+{}
+---data
+app_port <shared.Port>: "=shared.default_port + 1000"

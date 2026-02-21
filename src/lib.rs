@@ -23,6 +23,8 @@ pub mod ast;
 pub mod coerce;
 /// Error types used throughout parsing, compilation, and validation.
 pub mod error;
+/// URL-based import fetching, disk caching, and lockfile management.
+pub mod fetch;
 /// Expression lexer/parser/evaluator used by derived values and constraints.
 pub mod expr;
 /// Minimal YAML subset parser used for section bodies.
@@ -43,6 +45,8 @@ pub mod type_hints;
 pub mod typescript_codegen;
 /// Constraint and type-hint validation routines.
 pub mod validate;
+/// Import integrity verification: hash, signature, and version checks.
+pub mod verify;
 /// JSON-to-YAML renderer used by compiled YAML output.
 pub mod yaml_writer;
 
@@ -52,9 +56,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
 
-use ast::{CompiledDocument, DataDoc, EnvBinding, ImportBinding, Meta, ParsedDocument};
+use ast::{
+    CompiledDocument, DataDoc, EnvBinding, ImportBinding, Meta, ParsedDocument, SignatureBinding,
+};
 use coerce::coerce_string_constructors_for_type_hints;
 pub use error::SyamlError;
+use fetch::FetchContext;
 use resolve::{resolve_env_bindings, resolve_expressions_with_imports};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
 pub use rust_codegen::{generate_rust_types, generate_rust_types_from_path};
@@ -126,12 +133,38 @@ pub fn compile_document(
 /// Compiles a `.syaml` file into resolved data.
 ///
 /// Import paths are resolved relative to the source file's parent directory.
+/// URL imports are cached to disk and recorded in a lockfile alongside the source file.
 pub fn compile_document_from_path(
     path: impl AsRef<Path>,
     env_provider: &dyn EnvProvider,
 ) -> Result<CompiledDocument, SyamlError> {
-    let mut ctx = CompileContext::new(env_provider);
-    let compiled = compile_document_from_file(path.as_ref(), &mut ctx)?;
+    compile_document_from_path_with_fetch(path, env_provider, None, false)
+}
+
+/// Compiles a `.syaml` file with explicit fetch options for URL imports.
+///
+/// - `cache_dir`: overrides the default `$SYAML_CACHE_DIR` / `~/.cache/super_yaml/` location.
+/// - `force_update`: when `true`, bypasses the lockfile cache and re-fetches all URL imports.
+pub fn compile_document_from_path_with_fetch(
+    path: impl AsRef<Path>,
+    env_provider: &dyn EnvProvider,
+    cache_dir: Option<PathBuf>,
+    force_update: bool,
+) -> Result<CompiledDocument, SyamlError> {
+    let path = path.as_ref();
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let root_dir = canonical
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let mut ctx = CompileContext {
+        env_provider,
+        import_cache: HashMap::new(),
+        import_stack: Vec::new(),
+        fetch_ctx: FetchContext::new(&root_dir, cache_dir, force_update),
+    };
+    let compiled = compile_document_from_file(path, &mut ctx)?;
+    fetch::flush_lockfile(&ctx.fetch_ctx)?;
     Ok(CompiledDocument {
         value: compiled.value,
     })
@@ -183,6 +216,7 @@ struct CompileContext<'a> {
     env_provider: &'a dyn EnvProvider,
     import_cache: HashMap<PathBuf, CompiledWithTypes>,
     import_stack: Vec<PathBuf>,
+    fetch_ctx: FetchContext,
 }
 
 impl<'a> CompileContext<'a> {
@@ -191,8 +225,10 @@ impl<'a> CompileContext<'a> {
             env_provider,
             import_cache: HashMap::new(),
             import_stack: Vec::new(),
+            fetch_ctx: FetchContext::disabled(),
         }
     }
+
 }
 
 fn compile_document_internal(
@@ -209,12 +245,25 @@ fn compile_document_from_file(
     ctx: &mut CompileContext<'_>,
 ) -> Result<CompiledWithTypes, SyamlError> {
     let canonical_path = canonicalize_path(path)?;
+    let input = fs::read_to_string(&canonical_path).map_err(|e| {
+        SyamlError::ImportError(format!(
+            "failed to read import '{}': {e}",
+            canonical_path.display()
+        ))
+    })?;
+    compile_document_from_content(&input, &canonical_path, ctx)
+}
 
-    if let Some(cached) = ctx.import_cache.get(&canonical_path) {
+fn compile_document_from_content(
+    input: &str,
+    canonical_path: &Path,
+    ctx: &mut CompileContext<'_>,
+) -> Result<CompiledWithTypes, SyamlError> {
+    if let Some(cached) = ctx.import_cache.get(canonical_path) {
         return Ok(cached.clone());
     }
 
-    if let Some(index) = ctx.import_stack.iter().position(|p| p == &canonical_path) {
+    if let Some(index) = ctx.import_stack.iter().position(|p| p == canonical_path) {
         let mut chain: Vec<String> = ctx.import_stack[index..]
             .iter()
             .map(|p| p.display().to_string())
@@ -226,26 +275,19 @@ fn compile_document_from_file(
         )));
     }
 
-    let input = fs::read_to_string(&canonical_path).map_err(|e| {
-        SyamlError::ImportError(format!(
-            "failed to read import '{}': {e}",
-            canonical_path.display()
-        ))
-    })?;
-
-    ctx.import_stack.push(canonical_path.clone());
+    ctx.import_stack.push(canonical_path.to_path_buf());
     let base_dir = canonical_path.parent().ok_or_else(|| {
         SyamlError::ImportError(format!(
             "failed to resolve parent directory for '{}'",
             canonical_path.display()
         ))
     })?;
-    let compiled = compile_document_internal(&input, base_dir, ctx);
+    let compiled = compile_document_internal(input, base_dir, ctx);
     ctx.import_stack.pop();
 
     let compiled = compiled?;
     ctx.import_cache
-        .insert(canonical_path.clone(), compiled.clone());
+        .insert(canonical_path.to_path_buf(), compiled.clone());
     Ok(compiled)
 }
 
@@ -303,35 +345,66 @@ fn merge_imports(
     ctx: &mut CompileContext<'_>,
 ) -> Result<(), SyamlError> {
     for (alias, binding) in &meta.imports {
-        let import_path = resolve_import_path(base_dir, &binding.path)?;
-        let imported = compile_document_from_file(&import_path, ctx).map_err(|e| {
+        let source =
+            fetch::resolve_import_source(base_dir, &binding.path, &ctx.fetch_ctx)?;
+        let display_id = source.display_id();
+
+        let content = fetch::read_import_source(&source, &mut ctx.fetch_ctx).map_err(|e| {
             SyamlError::ImportError(format!(
-                "failed to compile import '{}' for namespace '{}': {e}",
-                import_path.display(),
-                alias
+                "failed to read import '{}' for namespace '{}': {e}",
+                display_id, alias
             ))
         })?;
+
+        if let Some(ref expected_hash) = binding.hash {
+            verify::verify_hash(content.as_bytes(), expected_hash).map_err(|e| {
+                SyamlError::HashError(format!(
+                    "import '{}' for namespace '{}': {e}",
+                    display_id, alias
+                ))
+            })?;
+        }
+
+        if let Some(ref sig) = binding.signature {
+            verify::verify_signature(content.as_bytes(), sig, base_dir).map_err(|e| {
+                SyamlError::SignatureError(format!(
+                    "import '{}' for namespace '{}': {e}",
+                    display_id, alias
+                ))
+            })?;
+        }
+
+        let canonical = source.canonical_path().to_path_buf();
+        let imported =
+            compile_document_from_content(&content, &canonical, ctx).map_err(|e| {
+                SyamlError::ImportError(format!(
+                    "failed to compile import '{}' for namespace '{}': {e}",
+                    display_id, alias
+                ))
+            })?;
+
+        if let Some(ref version_req) = binding.version {
+            let imported_parsed = parse_document(&content)?;
+            let imported_version = imported_parsed
+                .meta
+                .as_ref()
+                .and_then(|m| m.file.get("version"))
+                .and_then(|v| v.as_str());
+
+            verify::verify_version(imported_parsed.meta.as_ref(), version_req).map_err(|e| {
+                SyamlError::VersionError(format!(
+                    "import '{}' for namespace '{}': {e}",
+                    display_id, alias
+                ))
+            })?;
+
+            fetch::update_lockfile_version(&source, imported_version, &mut ctx.fetch_ctx);
+        }
+
         imported_data.insert(alias.clone(), imported.value.clone());
         insert_imported_types(type_registry, alias, &imported.exported_types)?;
     }
     Ok(())
-}
-
-fn resolve_import_path(base_dir: &Path, raw_path: &str) -> Result<PathBuf, SyamlError> {
-    let trimmed = raw_path.trim();
-    if trimmed.is_empty() {
-        return Err(SyamlError::ImportError(
-            "import path must be a non-empty string".to_string(),
-        ));
-    }
-
-    let path = Path::new(trimmed);
-    let resolved = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        base_dir.join(path)
-    };
-    canonicalize_path(&resolved)
 }
 
 fn canonicalize_path(path: &Path) -> Result<PathBuf, SyamlError> {
@@ -573,15 +646,64 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
         )));
     }
 
-    let path = match value {
-        JsonValue::String(path) => path.clone(),
-        JsonValue::Object(map) => map
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                SyamlError::SchemaError(format!("meta.imports.{} must define string path", alias))
-            })?
-            .to_string(),
+    let (path, hash, signature, version) = match value {
+        JsonValue::String(path) => (path.clone(), None, None, None),
+        JsonValue::Object(map) => {
+            let path = map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    SyamlError::SchemaError(format!(
+                        "meta.imports.{} must define string path",
+                        alias
+                    ))
+                })?
+                .to_string();
+
+            let hash = map.get("hash").and_then(|v| v.as_str()).map(String::from);
+
+            let signature = if let Some(sig_val) = map.get("signature") {
+                let sig_map = sig_val.as_object().ok_or_else(|| {
+                    SyamlError::SchemaError(format!(
+                        "meta.imports.{}.signature must be a mapping/object",
+                        alias
+                    ))
+                })?;
+                let public_key = sig_map
+                    .get("public_key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        SyamlError::SchemaError(format!(
+                            "meta.imports.{}.signature must define string public_key",
+                            alias
+                        ))
+                    })?
+                    .to_string();
+                let sig_value = sig_map
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        SyamlError::SchemaError(format!(
+                            "meta.imports.{}.signature must define string value",
+                            alias
+                        ))
+                    })?
+                    .to_string();
+                Some(SignatureBinding {
+                    public_key,
+                    value: sig_value,
+                })
+            } else {
+                None
+            };
+
+            let version = map
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            (path, hash, signature, version)
+        }
         _ => {
             return Err(SyamlError::SchemaError(format!(
                 "meta.imports.{} must be string or mapping/object",
@@ -597,7 +719,12 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
         )));
     }
 
-    Ok(ImportBinding { path })
+    Ok(ImportBinding {
+        path,
+        hash,
+        signature,
+        version,
+    })
 }
 
 fn is_valid_namespace_segment(value: &str) -> bool {

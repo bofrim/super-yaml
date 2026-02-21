@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 
-use super_yaml::{compile_document_from_path, MapEnvProvider};
+use ed25519_dalek::{Signer, SigningKey};
+
+use super_yaml::{compile_document_from_path, verify, MapEnvProvider};
 
 fn env_provider(vars: &[(&str, &str)]) -> MapEnvProvider {
     let mut map = HashMap::new();
@@ -744,4 +746,477 @@ service:
     assert_eq!(compiled["service"]["host"], json!("api.internal"));
     assert_eq!(compiled["service"]["port"], json!(8080));
     assert_eq!(compiled["service"]["url"], json!("https://api.internal:8080"));
+}
+
+#[test]
+fn locked_template_field_allows_unlocked_override_and_blocks_locked() {
+    let dir = TempDir::new("template_locked_fields");
+
+    dir.write(
+        "tpl.syaml",
+        r#"
+---!syaml/v0
+---schema
+Service:
+  type: object
+  properties:
+    name: string
+    host: string
+    port: integer
+    tls: boolean
+    env: [prod, staging, dev]
+---data
+templates:
+  service:
+    name!: "{{NAME}}"
+    host!: "{{HOST}}"
+    port: "{{PORT:8080}}"
+    tls: "{{TLS:false}}"
+    env!: "{{ENV}}"
+"#,
+    );
+
+    dir.write(
+        "ok.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  tpl: ./tpl.syaml
+---schema
+{}
+---data
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    NAME: api-service
+    HOST: api.internal
+    ENV: prod
+  port: 9090
+  tls: true
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("ok.syaml"));
+    assert_eq!(compiled["service"]["name"], json!("api-service"));
+    assert_eq!(compiled["service"]["host"], json!("api.internal"));
+    assert_eq!(compiled["service"]["port"], json!(9090));
+    assert_eq!(compiled["service"]["tls"], json!(true));
+    assert_eq!(compiled["service"]["env"], json!("prod"));
+
+    dir.write(
+        "bad.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  tpl: ./tpl.syaml
+---schema
+{}
+---data
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    NAME: api-service
+    HOST: api.internal
+    ENV: prod
+  name: override-attempt
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("bad.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("conflicts with locked template field"));
+    assert!(err.contains("'name'"));
+}
+
+// ---------------------------------------------------------------------------
+// Hash verification
+// ---------------------------------------------------------------------------
+
+#[test]
+fn import_with_correct_hash_succeeds() {
+    let dir = TempDir::new("hash_ok");
+    let shared_content = r#"
+---!syaml/v0
+---schema
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+---data
+port <Port>: 8080
+"#;
+    dir.write("shared.syaml", shared_content);
+    let hash = verify::compute_sha256(shared_content.as_bytes());
+
+    dir.write(
+        "root.syaml",
+        &format!(
+            r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    hash: {hash}
+---schema
+{{}}
+---data
+p <shared.Port>: "${{shared.port}}"
+"#
+        ),
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["p"], json!(8080));
+}
+
+#[test]
+fn import_with_wrong_hash_fails() {
+    let dir = TempDir::new("hash_bad");
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+x: 1
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+---schema
+{}
+---data
+y: 1
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("hash verification failed"));
+    assert!(err.contains("sha256 mismatch"));
+}
+
+// ---------------------------------------------------------------------------
+// Version pinning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn import_with_satisfied_version_succeeds() {
+    let dir = TempDir::new("version_ok");
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---meta
+file:
+  version: "1.2.3"
+---schema
+{}
+---data
+val: 42
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    version: "^1.0.0"
+---schema
+{}
+---data
+v: "${shared.val}"
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["v"], json!(42));
+}
+
+#[test]
+fn import_with_unsatisfied_version_fails() {
+    let dir = TempDir::new("version_bad");
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---meta
+file:
+  version: "1.2.3"
+---schema
+{}
+---data
+val: 42
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    version: ">=2.0.0"
+---schema
+{}
+---data
+v: "${shared.val}"
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("version requirement not satisfied"));
+    assert!(err.contains("does not satisfy"));
+}
+
+#[test]
+fn import_version_required_but_file_has_none_fails() {
+    let dir = TempDir::new("version_missing");
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+val: 1
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    version: "^1.0.0"
+---schema
+{}
+---data
+v: "${shared.val}"
+"#,
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("version requirement not satisfied"));
+    assert!(err.contains("does not declare"));
+}
+
+#[test]
+fn import_with_hash_and_version_both_pass() {
+    let dir = TempDir::new("hash_version_ok");
+    let shared_content = r#"
+---!syaml/v0
+---meta
+file:
+  version: "2.1.0"
+---schema
+{}
+---data
+x: 99
+"#;
+    dir.write("shared.syaml", shared_content);
+    let hash = verify::compute_sha256(shared_content.as_bytes());
+
+    dir.write(
+        "root.syaml",
+        &format!(
+            r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    hash: {hash}
+    version: ">=2.0.0, <3.0.0"
+---schema
+{{}}
+---data
+v: "${{shared.x}}"
+"#
+        ),
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["v"], json!(99));
+}
+
+// ---------------------------------------------------------------------------
+// Signature verification
+// ---------------------------------------------------------------------------
+
+fn generate_test_keypair() -> (SigningKey, ed25519_dalek::VerifyingKey) {
+    let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+    let verifying_key = signing_key.verifying_key();
+    (signing_key, verifying_key)
+}
+
+#[test]
+fn import_with_valid_signature_succeeds() {
+    use base64::Engine;
+
+    let dir = TempDir::new("sig_ok");
+    let (signing_key, verifying_key) = generate_test_keypair();
+
+    let shared_content = r#"
+---!syaml/v0
+---schema
+{}
+---data
+value: signed
+"#;
+    dir.write("shared.syaml", shared_content);
+
+    let signature = signing_key.sign(shared_content.as_bytes());
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+
+    // Write raw 32-byte public key
+    fs::write(dir.file_path("pub.key"), verifying_key.as_bytes()).unwrap();
+
+    dir.write(
+        "root.syaml",
+        &format!(
+            r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    signature:
+      public_key: ./pub.key
+      value: "{sig_b64}"
+---schema
+{{}}
+---data
+v: "${{shared.value}}"
+"#
+        ),
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["v"], json!("signed"));
+}
+
+#[test]
+fn import_with_invalid_signature_fails() {
+    use base64::Engine;
+
+    let dir = TempDir::new("sig_bad");
+    let (_signing_key, verifying_key) = generate_test_keypair();
+
+    let shared_content = r#"
+---!syaml/v0
+---schema
+{}
+---data
+value: original
+"#;
+    dir.write("shared.syaml", shared_content);
+
+    // Sign different content
+    let other_key = SigningKey::from_bytes(&[99u8; 32]);
+    let bad_signature = other_key.sign(b"different content");
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(bad_signature.to_bytes());
+
+    fs::write(dir.file_path("pub.key"), verifying_key.as_bytes()).unwrap();
+
+    dir.write(
+        "root.syaml",
+        &format!(
+            r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    signature:
+      public_key: ./pub.key
+      value: "{sig_b64}"
+---schema
+{{}}
+---data
+v: "${{shared.value}}"
+"#
+        ),
+    );
+
+    let err = compile_document_from_path(dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("signature verification failed"));
+}
+
+#[test]
+fn import_with_hash_signature_and_version_all_pass() {
+    use base64::Engine;
+
+    let dir = TempDir::new("all_verify");
+    let (signing_key, verifying_key) = generate_test_keypair();
+
+    let shared_content = r#"
+---!syaml/v0
+---meta
+file:
+  version: "3.0.1"
+---schema
+{}
+---data
+val: 777
+"#;
+    dir.write("shared.syaml", shared_content);
+
+    let hash = verify::compute_sha256(shared_content.as_bytes());
+    let signature = signing_key.sign(shared_content.as_bytes());
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+
+    fs::write(dir.file_path("pub.key"), verifying_key.as_bytes()).unwrap();
+
+    dir.write(
+        "root.syaml",
+        &format!(
+            r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    hash: {hash}
+    signature:
+      public_key: ./pub.key
+      value: "{sig_b64}"
+    version: "^3.0.0"
+---schema
+{{}}
+---data
+v: "${{shared.val}}"
+"#
+        ),
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["v"], json!(777));
 }

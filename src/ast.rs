@@ -75,8 +75,26 @@ pub struct EnvBinding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Single import entry from `meta.imports`.
 pub struct ImportBinding {
-    /// Filesystem path to another `.syaml` document.
+    /// Filesystem path or URL to another `.syaml` document.
     pub path: String,
+    /// Optional content hash in `algorithm:hex` format (e.g. `sha256:abcdef...`).
+    #[serde(default)]
+    pub hash: Option<String>,
+    /// Optional Ed25519 detached signature for content verification.
+    #[serde(default)]
+    pub signature: Option<SignatureBinding>,
+    /// Optional semver version requirement (e.g. `^1.2.0`).
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Ed25519 signature binding for import verification.
+pub struct SignatureBinding {
+    /// Path or URL to the Ed25519 public key file (DER/PEM).
+    pub public_key: String,
+    /// Base64-encoded detached Ed25519 signature over the raw file bytes.
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -41,6 +41,18 @@ pub enum SyamlError {
     /// Output serialization failure.
     #[error("serialization error: {0}")]
     SerializationError(String),
+    /// Hash verification mismatch or unsupported algorithm.
+    #[error("hash verification failed: {0}")]
+    HashError(String),
+    /// Ed25519 signature verification failure.
+    #[error("signature verification failed: {0}")]
+    SignatureError(String),
+    /// Semver version requirement not satisfied by imported file.
+    #[error("version requirement not satisfied: {0}")]
+    VersionError(String),
+    /// HTTP fetch or remote-import failure.
+    #[error("fetch error: {0}")]
+    FetchError(String),
     /// Filesystem I/O error from CLI or callers that propagate I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

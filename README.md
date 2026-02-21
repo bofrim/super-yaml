@@ -439,12 +439,27 @@ vip_service <Service>:
 
 This resolves to `{name: "vip-service", host: "vip.internal", port: 9443, tls: true, env: "prod"}` — `tls` and `port` override the template defaults.
 
+#### Locked template fields
+
+Append `!` to a key in the template definition to prevent sibling overrides:
+
+```yaml
+---data
+_templates:
+  service:
+    name!: "{{NAME}}"
+    host!: "{{HOST}}"
+    port: "{{PORT:8080}}"
+```
+
+With this template, `port` can be overridden by siblings, but `name` and `host` cannot. The `!` is stripped from the output key name.
+
 Template rules:
 
 - All required placeholders (`{{VAR}}`) must be provided.
 - Unknown variables are rejected.
 - When sibling keys are present, the template must expand to an object.
-- Sibling keys override template output when names conflict.
+- Sibling keys override template output when names conflict, unless the field is locked (`!`).
 - Only one template invocation is allowed per object.
 - Resolved values are validated against schema and type hints.
 
@@ -493,13 +508,75 @@ You can also extract entire subtrees from imports by referencing them as plain v
 shared_defaults: shared.defaults
 ```
 
+#### URL imports
+
+Import paths can be HTTP/HTTPS URLs. Downloaded content is cached to disk and tracked in a `syaml.lock` lockfile.
+
+```yaml
+---meta
+imports:
+  base: https://example.com/schemas/base.syaml
+```
+
+Use `--update-imports` to force re-fetch and `--cache-dir <path>` to override the cache location.
+
+#### Hash verification
+
+Pin imports to an exact SHA-256 content hash:
+
+```yaml
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    hash: sha256:e3b0c44298fc1c149afbf4c8996fb924...
+```
+
+#### Signature verification
+
+Verify imports were signed by a trusted Ed25519 key:
+
+```yaml
+---meta
+imports:
+  trusted:
+    path: https://corp.dev/schemas/base.syaml
+    signature:
+      public_key: ./keys/corp.pub
+      value: base64-encoded-detached-signature==
+```
+
+#### Version pinning
+
+Require imported files to declare a matching semver version in `meta.file.version`:
+
+```yaml
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    version: "^1.0.0"
+```
+
+The imported file advertises its version:
+
+```yaml
+---meta
+file:
+  version: "1.2.3"
+```
+
+All three verification options (hash, signature, version) are optional and composable.
+
 #### Import behavior
 
 - Imported files run their own complete compilation pipeline (env, expressions, validation).
 - Schema types are mounted under `<alias.TypeName>`.
 - Private data keys (prefixed with `_`) from imported files are not exposed.
 - Cyclic imports are detected and rejected.
-- Relative paths resolve from the importing file's directory.
+- Local paths resolve from the importing file's directory; URL sub-imports resolve as relative URLs.
+- Hash and signature are verified on raw bytes before parsing.
+- Version is checked after compilation against `meta.file.version`.
 
 ### String Constructors
 
