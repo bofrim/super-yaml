@@ -703,8 +703,9 @@ imports:
 Sub-imports from URL-sourced files resolve relative paths as relative URLs.
 
 CLI flags:
-- `--update-imports` &mdash; force re-fetch of all URL imports (bypass lockfile cache).
-- `--cache-dir <path>` &mdash; override the default cache directory (`$SYAML_CACHE_DIR` or `~/.cache/super_yaml/`).
+
+- `--update-imports` - force re-fetch of all URL imports (bypass lockfile cache).
+- `--cache-dir <path>` - override the default cache directory (`$SYAML_CACHE_DIR` or `~/.cache/super_yaml/`).
 
 ### Hash verification
 
@@ -733,8 +734,8 @@ imports:
       value: base64-encoded-detached-signature==
 ```
 
-- `public_key` &mdash; path to a raw 32-byte or PEM-encoded Ed25519 public key.
-- `value` &mdash; base64-encoded detached Ed25519 signature over the raw file bytes.
+- `public_key` - path to a raw 32-byte or PEM-encoded Ed25519 public key.
+- `value` - base64-encoded detached Ed25519 signature over the raw file bytes.
 
 ### Version pinning
 
