@@ -1,0 +1,40 @@
+---!syaml/v0
+---schema
+SeatLimit:
+  type: integer
+  minimum: 1
+
+RequestedSeats:
+  type: integer
+  minimum: 1
+
+Booking:
+  type: object
+  properties:
+    name: string
+    seat_limit: SeatLimit
+    requested_seats: RequestedSeats
+    vip: boolean
+    notes: string?
+  constraints:
+    - "requested_seats <= seat_limit"
+
+---data
+_templates:
+  booking:
+    name: "{{NAME}}"
+    seat_limit: 100
+    requested_seats: "{{REQUESTED_SEATS}}"
+    vip: false
+
+standard_booking <Booking>:
+  {{_templates.booking}}:
+    NAME: Aurora Book Club
+    REQUESTED_SEATS: 3
+
+vip_booking <Booking>:
+  {{_templates.booking}}:
+    NAME: Harbor Tech Meetup
+    REQUESTED_SEATS: 20
+  vip: true
+  notes: VIP override with extra capacity

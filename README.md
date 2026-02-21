@@ -422,11 +422,30 @@ api_service <Service>:
 
 This resolves to `{name: "api-service", host: "api.internal", port: 8080, tls: false, env: "prod"}`.
 
+#### Mixing templates with sibling keys
+
+Template invocations can appear alongside other keys in the same object. The expanded template is merged with the sibling entries, and sibling keys override any conflicting template key:
+
+```yaml
+---data
+vip_service <Service>:
+  {{_templates.service}}:
+    NAME: vip-service
+    HOST: vip.internal
+    ENV: prod
+  tls: true
+  port: 9443
+```
+
+This resolves to `{name: "vip-service", host: "vip.internal", port: 9443, tls: true, env: "prod"}` — `tls` and `port` override the template defaults.
+
 Template rules:
 
-- The template invocation key must be the only key in the object.
 - All required placeholders (`{{VAR}}`) must be provided.
 - Unknown variables are rejected.
+- When sibling keys are present, the template must expand to an object.
+- Sibling keys override template output when names conflict.
+- Only one template invocation is allowed per object.
 - Resolved values are validated against schema and type hints.
 
 Templates combine naturally with [private data keys](#private-data-keys) (prefix `_templates` to keep them out of compiled output) and [imports](#imports) (reference templates from external files).

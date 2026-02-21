@@ -1,0 +1,15 @@
+{
+  "standard_booking": {
+    "name": "Aurora Book Club",
+    "requested_seats": 3,
+    "seat_limit": 100,
+    "vip": false
+  },
+  "vip_booking": {
+    "name": "Harbor Tech Meetup",
+    "notes": "VIP override with extra capacity",
+    "requested_seats": 20,
+    "seat_limit": 100,
+    "vip": true
+  }
+}

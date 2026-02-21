@@ -7,6 +7,7 @@ You are working with **super_yaml**, a configuration language and toolchain. Thi
 super_yaml compiles `.syaml` files into resolved **JSON** or **YAML** output. It can also generate **Rust structs** and **TypeScript interfaces** from schema definitions.
 
 A `.syaml` file combines:
+
 - A **schema** that defines and validates data shapes
 - **Data** with inline type hints, computed expressions, and string interpolation
 - **Environment bindings** that inject external values at compile time
@@ -114,12 +115,14 @@ env:
 ```
 
 Each binding has these fields:
+
 - `from`: Must be `env` (the only supported source).
 - `key`: The name of the process environment variable to read.
 - `required`: Whether the variable must be set. Defaults to `true`.
 - `default`: Fallback value when the variable is not set.
 
 Resolution order:
+
 1. Read the environment variable named by `key`.
 2. If present, parse the string as a YAML scalar (number, boolean, string, etc.).
 3. If absent and `default` is set, use the default.
@@ -427,14 +430,14 @@ Use `from_enum: TypeName` to validate a captured string against a named enum typ
 
 ### Complete schema keyword reference
 
-| Category | Keywords |
-|----------|----------|
-| Common | `type`, `enum` |
-| Numeric | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` |
-| String | `minLength`, `maxLength`, `pattern` |
-| Object | `properties`, `values`, `required`, `optional`, `constructors` |
-| Array | `items`, `minItems`, `maxItems` |
-| Validation | `constraints` |
+| Category   | Keywords                                                       |
+| ---------- | -------------------------------------------------------------- |
+| Common     | `type`, `enum`                                                 |
+| Numeric    | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`   |
+| String     | `minLength`, `maxLength`, `pattern`                            |
+| Object     | `properties`, `values`, `required`, `optional`, `constructors` |
+| Array      | `items`, `minItems`, `maxItems`                                |
+| Validation | `constraints`                                                  |
 
 ---
 
@@ -479,6 +482,7 @@ max_connections <integer>: "=replicas * worker_threads * 25"
 ```
 
 Expressions support:
+
 - **Arithmetic**: `+ - * / %`
 - **Comparison**: `== != < <= > >=`
 - **Boolean**: `&& || !`
@@ -486,6 +490,7 @@ Expressions support:
 - **Functions**: `min()`, `max()`, `abs()`, `floor()`, `ceil()`, `round()`, `len()`, `coalesce()`
 
 Variable sources:
+
 - Data paths: `replicas`, `service.port`, `inventory.daily_demand`
 - Environment: `env.CPU_CORES`, `env.DB_HOST`
 - Imported data: `shared.defaults.port`
@@ -540,11 +545,12 @@ _templates:
     port: "{{PORT:8080}}"
     tls: "{{TLS:false}}"
     env: "{{ENV}}"
+    level: standard
 ```
 
 #### Invoking templates
 
-Use the template path as the only key in an object, and pass variable bindings as the value:
+Use the template path as a key in an object, and pass variable bindings as the value:
 
 ```yaml
 ---data
@@ -565,13 +571,48 @@ This resolves to:
     "port": 8080,
     "tls": false,
     "env": "prod"
+    "level": "standard"
+  }
+}
+```
+
+#### Mixing templates with sibling keys
+
+Template invocations can appear alongside other keys in the same object. The template output is merged with the sibling keys, and siblings override any conflicting template key:
+
+```yaml
+---data
+vip_service <Service>:
+  {{_templates.service}}:
+    NAME: vip-service
+    HOST: vip.internal
+    ENV: prod
+  tls: true
+  port: 9443
+  level: critical
+```
+
+This resolves to:
+
+```json
+{
+  "vip_service": {
+    "name": "vip-service",
+    "host": "vip.internal",
+    "port": 9443,
+    "tls": true,
+    "env": "prod",
+    "level": "critical"
   }
 }
 ```
 
 Rules:
-- The template invocation key (`{{path}}`) must be the **only** key in that object.
+
 - All required variables must be provided. Unknown variables are rejected.
+- When sibling keys are present, the template must expand to an object (not a scalar or array).
+- Sibling keys override template output when names conflict.
+- Only one template invocation is allowed per object.
 - After template expansion, type hints and constraints are validated.
 
 #### Templates from imported files
@@ -1139,7 +1180,7 @@ let compiled = compile_document(input, &env)?;
 1. **Missing marker**: Every file must start with `---!syaml/v0` as the first non-empty line.
 2. **Unquoted expressions**: Expression values must be quoted strings: `"=a + b"`, not `=a + b`.
 3. **Unquoted interpolation**: Interpolated strings must be quoted: `"${env.HOST}"`, not `${env.HOST}`.
-4. **Template key not alone**: The `{{template.path}}` key must be the only key in its object.
+4. **Multiple template keys in one object**: Only one `{{template.path}}` invocation is allowed per object. Sibling (non-template) keys are fine and will be merged with the template output.
 5. **Missing type hint for constructors**: String constructors only fire when the value has a type hint pointing to the constructor's object type. `memory: 16GiB` does nothing — `memory <MemorySpec>: 16GiB` triggers the constructor.
 6. **Forgetting `from: env`**: Each env binding must include `from: env` (the only supported source).
 7. **Circular dependencies**: `a: "=b"` and `b: "=a"` will fail with a cycle error.
@@ -1211,4 +1252,9 @@ _private_key: internal_only               # Private (stripped from output)
 template_result <TypeName>:                # Template invocation
   {{path.to.template}}:
     VAR: value
+
+template_with_overrides <TypeName>:        # Template with sibling overrides
+  {{path.to.template}}:
+    VAR: value
+  extra_key: extra_value                   # Merged; overrides template on conflict
 ```

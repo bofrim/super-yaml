@@ -46,8 +46,32 @@ fn expand_value(
                     }
                 }
 
+                let siblings: Vec<(String, JsonValue)> = map
+                    .iter()
+                    .filter(|(k, _)| parse_template_key(k).is_none())
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+
                 let filled = substitute_placeholders(template_source, &vars, path)?;
-                *value = filled;
+
+                if siblings.is_empty() {
+                    *value = filled;
+                } else {
+                    let mut merged = match filled {
+                        JsonValue::Object(obj) => obj,
+                        _ => {
+                            return Err(SyamlError::TemplateError(format!(
+                                "template '{}' at {} must expand to an object when used alongside sibling keys",
+                                template_ref, path
+                            )));
+                        }
+                    };
+                    for (k, v) in siblings {
+                        merged.insert(k, v);
+                    }
+                    *value = JsonValue::Object(merged);
+                }
+
                 return expand_value(value, root, imports, path);
             }
 
@@ -73,6 +97,7 @@ fn parse_template_invocation(
     path: &str,
 ) -> Result<Option<(String, HashMap<String, JsonValue>)>, SyamlError> {
     let mut invocation_key: Option<String> = None;
+    let mut raw_key: Option<String> = None;
 
     for key in map.keys() {
         if let Some(template_ref) = parse_template_key(key) {
@@ -83,6 +108,7 @@ fn parse_template_invocation(
                 )));
             }
             invocation_key = Some(template_ref);
+            raw_key = Some(key.clone());
         }
     }
 
@@ -90,17 +116,9 @@ fn parse_template_invocation(
         return Ok(None);
     };
 
-    if map.len() != 1 {
-        return Err(SyamlError::TemplateError(format!(
-            "template invocation at {} cannot be mixed with sibling keys",
-            path
-        )));
-    }
-
     let raw_vars = map
-        .values()
-        .next()
-        .expect("single key exists")
+        .get(raw_key.as_ref().unwrap())
+        .expect("template key exists in map")
         .as_object()
         .ok_or_else(|| {
             SyamlError::TemplateError(format!(
@@ -430,6 +448,80 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unexpected template variable 'B'"));
+    }
+
+    #[test]
+    fn merges_sibling_keys_with_template_expansion() {
+        let mut data = json!({
+            "tpl": {
+                "templates": {
+                    "service": {
+                        "host": "{{HOST}}",
+                        "port": "{{PORT:8080}}",
+                        "tls": "{{TLS:false}}"
+                    }
+                }
+            },
+            "service": {
+                "{{tpl.templates.service}}": {
+                    "HOST": "api.internal"
+                },
+                "replicas": 3,
+                "debug": false
+            }
+        });
+
+        let imports = HashMap::new();
+        expand_data_templates(&mut data, &imports).unwrap();
+        assert_eq!(data["service"]["host"], json!("api.internal"));
+        assert_eq!(data["service"]["port"], json!(8080));
+        assert_eq!(data["service"]["tls"], json!(false));
+        assert_eq!(data["service"]["replicas"], json!(3));
+        assert_eq!(data["service"]["debug"], json!(false));
+    }
+
+    #[test]
+    fn sibling_keys_override_template_values() {
+        let mut data = json!({
+            "_templates": {
+                "base": {
+                    "host": "{{HOST}}",
+                    "port": "{{PORT:8080}}",
+                    "tls": "{{TLS:false}}"
+                }
+            },
+            "service": {
+                "{{_templates.base}}": {
+                    "HOST": "default.internal"
+                },
+                "port": 9090
+            }
+        });
+
+        let imports = HashMap::new();
+        expand_data_templates(&mut data, &imports).unwrap();
+        assert_eq!(data["service"]["host"], json!("default.internal"));
+        assert_eq!(data["service"]["port"], json!(9090));
+        assert_eq!(data["service"]["tls"], json!(false));
+    }
+
+    #[test]
+    fn rejects_non_object_template_with_siblings() {
+        let mut data = json!({
+            "_templates": {
+                "items": ["a", "b", "c"]
+            },
+            "result": {
+                "{{_templates.items}}": {},
+                "extra": true
+            }
+        });
+
+        let imports = HashMap::new();
+        let err = expand_data_templates(&mut data, &imports)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must expand to an object when used alongside sibling keys"));
     }
 
     #[test]

@@ -660,3 +660,88 @@ service <tpl.Service>:
     assert!(err.contains("expected integer"));
     assert!(err.contains("$.service.port"));
 }
+
+#[test]
+fn template_with_sibling_keys_merges_and_validates() {
+    let dir = TempDir::new("template_siblings");
+
+    dir.write(
+        "tpl.syaml",
+        r#"
+---!syaml/v0
+---schema
+Service:
+  type: object
+  properties:
+    name: string
+    host: string
+    port: integer
+    tls: boolean
+    env: [prod, staging, dev]
+---data
+templates:
+  service:
+    name: "{{NAME}}"
+    host: "{{HOST}}"
+    port: "{{PORT:8080}}"
+    tls: "{{TLS:false}}"
+    env: "{{ENV}}"
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  tpl: ./tpl.syaml
+---schema
+{}
+---data
+service <tpl.Service>:
+  "{{tpl.templates.service}}":
+    NAME: api-service
+    HOST: api.internal
+    ENV: prod
+  port <integer>: 9090
+  tls: true
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["service"]["name"], json!("api-service"));
+    assert_eq!(compiled["service"]["host"], json!("api.internal"));
+    assert_eq!(compiled["service"]["port"], json!(9090));
+    assert_eq!(compiled["service"]["tls"], json!(true));
+    assert_eq!(compiled["service"]["env"], json!("prod"));
+}
+
+#[test]
+fn template_with_sibling_expression_resolves() {
+    let dir = TempDir::new("template_sibling_expr");
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+_templates:
+  base:
+    host: "{{HOST}}"
+    port: "{{PORT:8080}}"
+
+service:
+  "{{_templates.base}}":
+    HOST: api.internal
+  url: "https://${service.host}:${service.port}"
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["service"]["host"], json!("api.internal"));
+    assert_eq!(compiled["service"]["port"], json!(8080));
+    assert_eq!(compiled["service"]["url"], json!("https://api.internal:8080"));
+}
