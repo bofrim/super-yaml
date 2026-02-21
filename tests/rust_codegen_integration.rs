@@ -129,3 +129,37 @@ service <Service>:
     assert!(rendered.contains("pub struct Service"));
     assert!(rendered.contains("pub port: SharedPort,"));
 }
+
+#[test]
+fn generate_rust_types_includes_deprecated_and_field_number() {
+    let input = r#"
+---!syaml/v0
+---schema
+User:
+  type: object
+  properties:
+    id:
+      type: integer
+      field_number: 1
+      since: "1.0.0"
+    legacy_name:
+      type: string
+      field_number: 6
+      since: "1.0.0"
+      deprecated:
+        version: "2.0.0"
+        severity: warning
+        message: "Use 'name' instead"
+      optional: true
+---data
+x: 1
+"#;
+
+    let rendered = generate_rust_types(input).unwrap();
+    // field_number doc comment
+    assert!(rendered.contains("/// Field number: 1"), "missing field_number comment for id");
+    assert!(rendered.contains("/// Field number: 6"), "missing field_number comment for legacy_name");
+    // deprecated attribute
+    assert!(rendered.contains("#[deprecated"), "missing #[deprecated] attribute");
+    assert!(rendered.contains("Use 'name' instead"), "missing deprecation message");
+}

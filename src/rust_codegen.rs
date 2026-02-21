@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::ast::{ImportBinding, ParsedDocument};
+use crate::schema::parse_field_version_meta;
 use crate::{parse_document, SyamlError};
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -520,6 +521,23 @@ fn render_object_struct(
         let mut rust_type = rust_type_for_schema(schema, state);
         if optional {
             rust_type = format!("Option<{rust_type}>");
+        }
+
+        // Emit versioning doc comments and attributes.
+        if let Ok(Some(meta)) = parse_field_version_meta(schema) {
+            if let Some(fn_num) = meta.field_number {
+                out.push_str(&format!("    /// Field number: {fn_num}\n"));
+            }
+            if let Some(dep) = meta.deprecated {
+                let note = match dep.message {
+                    Some(msg) => format!("since {}: {}", dep.version, msg),
+                    None => format!("since {}", dep.version),
+                };
+                out.push_str(&format!(
+                    "    #[deprecated(note = \"{}\")]\n",
+                    escape_string(&note)
+                ));
+            }
         }
 
         if field_name != key.as_str() {

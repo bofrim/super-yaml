@@ -1,0 +1,9 @@
+{
+  "user": {
+    "avatar_url": "https://example.com/alice.png",
+    "email": "alice@example.com",
+    "id": 42,
+    "legacy_name": "alice_old",
+    "name": "Alice"
+  }
+}

@@ -166,3 +166,37 @@ b: 1
     let err = generate_typescript_types_from_path(dir.file_path("a.syaml")).unwrap_err();
     assert!(err.to_string().contains("cyclic import detected"));
 }
+
+#[test]
+fn generate_typescript_types_includes_deprecated_jsdoc() {
+    let input = r#"
+---!syaml/v0
+---schema
+User:
+  type: object
+  properties:
+    id:
+      type: integer
+      field_number: 1
+      since: "1.0.0"
+    legacy_name:
+      type: string
+      field_number: 6
+      since: "1.0.0"
+      deprecated:
+        version: "2.0.0"
+        severity: warning
+        message: "Use 'name' instead"
+      optional: true
+---data
+x: 1
+"#;
+
+    let rendered = generate_typescript_types(input).unwrap();
+    // field_number comment
+    assert!(rendered.contains("Field number: 1"), "missing field_number for id");
+    assert!(rendered.contains("Field number: 6"), "missing field_number for legacy_name");
+    // @deprecated JSDoc
+    assert!(rendered.contains("@deprecated"), "missing @deprecated JSDoc");
+    assert!(rendered.contains("Use 'name' instead"), "missing deprecation message");
+}

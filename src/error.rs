@@ -50,6 +50,9 @@ pub enum SyamlError {
     /// Semver version requirement not satisfied by imported file.
     #[error("version requirement not satisfied: {0}")]
     VersionError(String),
+    /// Version field lifecycle rule violation (since/deprecated/removed checks).
+    #[error("version field error: {0}")]
+    VersionFieldError(String),
     /// HTTP fetch or remote-import failure.
     #[error("fetch error: {0}")]
     FetchError(String),

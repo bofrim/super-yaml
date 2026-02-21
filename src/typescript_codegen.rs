@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::ast::{ImportBinding, ParsedDocument};
+use crate::schema::parse_field_version_meta;
 use crate::{parse_document, SyamlError};
 
 const TYPESCRIPT_KEYWORDS: &[&str] = &[
@@ -588,6 +589,27 @@ fn render_object_interface(
         let ts_type = ts_type_for_schema(schema, state);
         let field_name = render_property_name(key);
         let optional_suffix = if optional { "?" } else { "" };
+
+        // Emit versioning JSDoc block if needed.
+        if let Ok(Some(meta)) = parse_field_version_meta(schema) {
+            let has_fn = meta.field_number.is_some();
+            let has_dep = meta.deprecated.is_some();
+            if has_fn || has_dep {
+                out.push_str("  /**\n");
+                if let Some(fn_num) = meta.field_number {
+                    out.push_str(&format!("   * Field number: {fn_num}\n"));
+                }
+                if let Some(dep) = meta.deprecated {
+                    let dep_msg = match dep.message {
+                        Some(msg) => format!("since {} - {}", dep.version, msg),
+                        None => format!("since {}", dep.version),
+                    };
+                    out.push_str(&format!("   * @deprecated {dep_msg}\n"));
+                }
+                out.push_str("   */\n");
+            }
+        }
+
         out.push_str(&format!("  {field_name}{optional_suffix}: {ts_type};\n"));
     }
 

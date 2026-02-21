@@ -72,6 +72,7 @@ use type_hints::normalize_data_with_hints;
 pub use typescript_codegen::{generate_typescript_types, generate_typescript_types_from_path};
 use validate::{
     build_effective_constraints, validate_constraints_with_imports, validate_type_hints,
+    validate_versioned_fields,
 };
 
 /// Parses a `.syaml` document into its structured representation.
@@ -127,6 +128,7 @@ pub fn compile_document(
     let compiled = compile_document_internal(input, &cwd, &mut ctx)?;
     Ok(CompiledDocument {
         value: compiled.value,
+        warnings: compiled.warnings,
     })
 }
 
@@ -167,6 +169,7 @@ pub fn compile_document_from_path_with_fetch(
     fetch::flush_lockfile(&ctx.fetch_ctx)?;
     Ok(CompiledDocument {
         value: compiled.value,
+        warnings: compiled.warnings,
     })
 }
 
@@ -210,6 +213,7 @@ pub fn compile_document_to_yaml(
 struct CompiledWithTypes {
     value: JsonValue,
     exported_types: BTreeMap<String, JsonValue>,
+    warnings: Vec<String>,
 }
 
 struct CompileContext<'a> {
@@ -304,6 +308,16 @@ fn compile_parsed_document(
         merge_imports(meta, base_dir, &mut schema.types, &mut imported_data, ctx)?;
     }
     validate_schema_type_references(&schema.types)?;
+
+    let target_schema_version: Option<semver::Version> = parsed
+        .meta
+        .as_ref()
+        .and_then(|m| m.file.get("schema_version"))
+        .and_then(|v| v.as_str())
+        .map(|s| semver::Version::parse(s))
+        .transpose()
+        .map_err(|e| SyamlError::VersionError(format!("invalid meta.file.schema_version: {e}")))?;
+
     extract_explicit_import_values(&mut data, &imported_data)?;
     expand_data_templates(&mut data, &imported_data)?;
 
@@ -318,11 +332,16 @@ fn compile_parsed_document(
     validate_type_hints(&data, &parsed.data.type_hints, &schema)?;
     let constraints = build_effective_constraints(&parsed.data.type_hints, &schema);
     validate_constraints_with_imports(&data, &env_values, &constraints, &imports_for_eval)?;
+
+    let warnings =
+        validate_versioned_fields(&data, &parsed.data.type_hints, &schema, target_schema_version.as_ref())?;
+
     strip_private_top_level_data_keys(&mut data);
 
     Ok(CompiledWithTypes {
         value: data,
         exported_types: schema.types,
+        warnings,
     })
 }
 

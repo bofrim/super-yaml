@@ -1,0 +1,47 @@
+---!syaml/v0
+---meta
+file:
+  schema_version: "2.0.0"
+---schema
+UserProfile:
+  type: object
+  properties:
+    id:
+      type: integer
+      field_number: 1
+      since: "1.0.0"
+    name:
+      type: string
+      field_number: 2
+      since: "1.0.0"
+    email:
+      type: string
+      field_number: 3
+      since: "1.0.0"
+    avatar_url:
+      type: string
+      field_number: 5
+      since: "2.0.0"
+      optional: true
+    legacy_name:
+      type: string
+      field_number: 6
+      since: "1.0.0"
+      deprecated:
+        version: "2.0.0"
+        severity: warning
+        message: "Use 'name' instead"
+      optional: true
+    old_id:
+      type: string
+      field_number: 7
+      since: "1.0.0"
+      removed: "2.0.0"
+      optional: true
+---data
+user <UserProfile>:
+  id: 42
+  name: Alice
+  email: alice@example.com
+  avatar_url: https://example.com/alice.png
+  legacy_name: alice_old

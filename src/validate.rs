@@ -11,7 +11,7 @@ use crate::expr::eval::{evaluate, EvalContext, EvalError};
 use crate::expr::parse_expression;
 use crate::expr::parser::{BinaryOp, Expr};
 use crate::resolve::get_json_path;
-use crate::schema::{resolve_type_schema, validate_json_against_schema_with_types};
+use crate::schema::{parse_field_version_meta, resolve_type_schema, validate_json_against_schema_with_types};
 
 const MAX_CONSTRAINT_PATHS: usize = 2048;
 const MAX_CONSTRAINTS_PER_PATH: usize = 128;
@@ -983,6 +983,103 @@ fn map_eval_error(err: EvalError) -> SyamlError {
         )),
         EvalError::Fatal(e) => e,
     }
+}
+
+/// Validates data fields against schema versioning annotations.
+///
+/// When `target_version` is `None`, all checks are skipped and no warnings are produced.
+/// Returns collected warnings (deprecation notices). Hard errors are returned as `SyamlError`.
+pub fn validate_versioned_fields(
+    data: &JsonValue,
+    hints: &BTreeMap<String, String>,
+    schema: &SchemaDoc,
+    target_version: Option<&semver::Version>,
+) -> Result<Vec<String>, SyamlError> {
+    let Some(target) = target_version else {
+        return Ok(Vec::new());
+    };
+
+    let mut warnings = Vec::new();
+
+    for (hint_path, type_name) in hints {
+        let type_schema = match schema.types.get(type_name) {
+            Some(s) => s,
+            None => continue,
+        };
+        let Some(type_obj) = type_schema.as_object() else {
+            continue;
+        };
+        let Some(props) = type_obj.get("properties").and_then(JsonValue::as_object) else {
+            continue;
+        };
+
+        let data_value = match get_json_path(data, hint_path) {
+            Some(v) => v,
+            None => continue,
+        };
+        let Some(data_obj) = data_value.as_object() else {
+            continue;
+        };
+
+        for (prop_name, prop_schema) in props {
+            let field_present = data_obj.contains_key(prop_name);
+
+            let meta = match parse_field_version_meta(prop_schema) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let Some(meta) = meta else {
+                continue;
+            };
+
+            // `since` check: field is present but target < since → error
+            if let Some(ref since) = meta.since {
+                if field_present && target < since {
+                    return Err(SyamlError::VersionFieldError(format!(
+                        "field '{}' at '{}' is not available until version {} (target: {})",
+                        prop_name, hint_path, since, target
+                    )));
+                }
+            }
+
+            // `removed` check: field is present and target >= removed → error
+            if let Some(ref removed) = meta.removed {
+                if field_present && target >= removed {
+                    return Err(SyamlError::VersionFieldError(format!(
+                        "field '{}' at '{}' was removed in version {} (target: {})",
+                        prop_name, hint_path, removed, target
+                    )));
+                }
+            }
+
+            // `deprecated` check: field is present and target >= deprecated.version
+            if let Some(ref dep_info) = meta.deprecated {
+                if field_present && target >= &dep_info.version {
+                    use crate::schema::DeprecationSeverity;
+                    let msg = match &dep_info.message {
+                        Some(m) => format!(
+                            "field '{}' at '{}' is deprecated since version {}: {}",
+                            prop_name, hint_path, dep_info.version, m
+                        ),
+                        None => format!(
+                            "field '{}' at '{}' is deprecated since version {}",
+                            prop_name, hint_path, dep_info.version
+                        ),
+                    };
+                    match dep_info.severity {
+                        DeprecationSeverity::Error => {
+                            return Err(SyamlError::VersionFieldError(msg));
+                        }
+                        DeprecationSeverity::Warning => {
+                            warnings.push(msg);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(warnings)
 }
 
 fn json_type_name(value: &JsonValue) -> &'static str {

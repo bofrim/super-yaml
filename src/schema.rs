@@ -6,6 +6,7 @@
 //! - String: `minLength`, `maxLength`, `pattern`
 //! - Object: `properties`, `values`, `required`, `optional` (on property schemas), `constructors`
 //! - Array: `items`, `minItems`, `maxItems`
+//! - Version: `since`, `deprecated`, `removed`, `field_number`
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -57,6 +58,8 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
             type_constraints.insert(type_name.clone(), collected);
         }
     }
+
+    validate_versioned_field_annotations(&types)?;
 
     Ok(SchemaDoc {
         types,
@@ -1249,4 +1252,255 @@ fn json_type_name(value: &JsonValue) -> &'static str {
     } else {
         "object"
     }
+}
+
+// ── Field-level versioning metadata ──────────────────────────────────────────
+
+/// Lifecycle metadata that can be attached to a property schema.
+#[derive(Debug, Clone)]
+pub struct FieldVersionMeta {
+    /// Version in which the field was introduced.
+    pub since: Option<semver::Version>,
+    /// Deprecation information, if the field has been deprecated.
+    pub deprecated: Option<DeprecationInfo>,
+    /// Version in which the field was removed.
+    pub removed: Option<semver::Version>,
+    /// Stable numeric field identity (protobuf-style).
+    pub field_number: Option<u64>,
+}
+
+/// Information about a field's deprecation.
+#[derive(Debug, Clone)]
+pub struct DeprecationInfo {
+    /// Version at which the field was deprecated.
+    pub version: semver::Version,
+    /// How violations should be surfaced.
+    pub severity: DeprecationSeverity,
+    /// Optional human-readable message.
+    pub message: Option<String>,
+}
+
+/// Controls whether a deprecation produces a warning or a hard error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeprecationSeverity {
+    Warning,
+    Error,
+}
+
+/// Extracts versioning metadata from a property schema object.
+///
+/// Returns `Ok(None)` for fields with no version annotations.
+pub fn parse_field_version_meta(
+    property_schema: &JsonValue,
+) -> Result<Option<FieldVersionMeta>, SyamlError> {
+    let Some(obj) = property_schema.as_object() else {
+        return Ok(None);
+    };
+
+    let has_since = obj.contains_key("since");
+    let has_deprecated = obj.contains_key("deprecated");
+    let has_removed = obj.contains_key("removed");
+    let has_field_number = obj.contains_key("field_number");
+
+    if !has_since && !has_deprecated && !has_removed && !has_field_number {
+        return Ok(None);
+    }
+
+    let since = if let Some(v) = obj.get("since") {
+        let s = v.as_str().ok_or_else(|| {
+            SyamlError::SchemaError("'since' must be a semver string".to_string())
+        })?;
+        Some(
+            semver::Version::parse(s)
+                .map_err(|e| SyamlError::SchemaError(format!("invalid 'since' version: {e}")))?,
+        )
+    } else {
+        None
+    };
+
+    let removed = if let Some(v) = obj.get("removed") {
+        let s = v.as_str().ok_or_else(|| {
+            SyamlError::SchemaError("'removed' must be a semver string".to_string())
+        })?;
+        Some(
+            semver::Version::parse(s)
+                .map_err(|e| SyamlError::SchemaError(format!("invalid 'removed' version: {e}")))?,
+        )
+    } else {
+        None
+    };
+
+    let deprecated = if let Some(dep_val) = obj.get("deprecated") {
+        Some(parse_deprecation_info(dep_val)?)
+    } else {
+        None
+    };
+
+    let field_number = if let Some(fn_val) = obj.get("field_number") {
+        let n = fn_val.as_u64().ok_or_else(|| {
+            SyamlError::SchemaError(
+                "'field_number' must be a positive integer".to_string(),
+            )
+        })?;
+        if n == 0 {
+            return Err(SyamlError::SchemaError(
+                "'field_number' must be a positive integer (> 0)".to_string(),
+            ));
+        }
+        Some(n)
+    } else {
+        None
+    };
+
+    // Validate ordering: since <= deprecated.version <= removed
+    if let (Some(ref s), Some(ref d)) = (&since, &deprecated) {
+        if s > &d.version {
+            return Err(SyamlError::SchemaError(format!(
+                "version ordering violation: 'since' ({}) must be <= 'deprecated' ({})",
+                s, d.version
+            )));
+        }
+    }
+    if let (Some(ref d), Some(ref r)) = (&deprecated, &removed) {
+        if &d.version > r {
+            return Err(SyamlError::SchemaError(format!(
+                "version ordering violation: 'deprecated' ({}) must be <= 'removed' ({})",
+                d.version, r
+            )));
+        }
+    }
+    if let (Some(ref s), Some(ref r)) = (&since, &removed) {
+        if s > r {
+            return Err(SyamlError::SchemaError(format!(
+                "version ordering violation: 'since' ({}) must be <= 'removed' ({})",
+                s, r
+            )));
+        }
+    }
+
+    // Removed fields must be optional
+    if removed.is_some() {
+        let is_optional = obj
+            .get("optional")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        if !is_optional {
+            return Err(SyamlError::SchemaError(
+                "a field with 'removed' must also have 'optional: true'".to_string(),
+            ));
+        }
+    }
+
+    Ok(Some(FieldVersionMeta {
+        since,
+        deprecated,
+        removed,
+        field_number,
+    }))
+}
+
+fn parse_deprecation_info(value: &JsonValue) -> Result<DeprecationInfo, SyamlError> {
+    match value {
+        JsonValue::String(s) => {
+            let version = semver::Version::parse(s).map_err(|e| {
+                SyamlError::SchemaError(format!("invalid 'deprecated' version: {e}"))
+            })?;
+            Ok(DeprecationInfo {
+                version,
+                severity: DeprecationSeverity::Warning,
+                message: None,
+            })
+        }
+        JsonValue::Object(map) => {
+            let version_str = map
+                .get("version")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| {
+                    SyamlError::SchemaError(
+                        "'deprecated' object must have a 'version' string".to_string(),
+                    )
+                })?;
+            let version = semver::Version::parse(version_str).map_err(|e| {
+                SyamlError::SchemaError(format!("invalid 'deprecated.version': {e}"))
+            })?;
+
+            let severity = if let Some(sev_val) = map.get("severity") {
+                let sev_str = sev_val.as_str().ok_or_else(|| {
+                    SyamlError::SchemaError(
+                        "'deprecated.severity' must be a string".to_string(),
+                    )
+                })?;
+                match sev_str {
+                    "warning" => DeprecationSeverity::Warning,
+                    "error" => DeprecationSeverity::Error,
+                    other => {
+                        return Err(SyamlError::SchemaError(format!(
+                            "invalid 'deprecated.severity' value '{}'; expected 'warning' or 'error'",
+                            other
+                        )));
+                    }
+                }
+            } else {
+                DeprecationSeverity::Warning
+            };
+
+            let message = map
+                .get("message")
+                .and_then(JsonValue::as_str)
+                .map(String::from);
+
+            Ok(DeprecationInfo {
+                version,
+                severity,
+                message,
+            })
+        }
+        _ => Err(SyamlError::SchemaError(
+            "'deprecated' must be a semver string or an object with 'version'".to_string(),
+        )),
+    }
+}
+
+/// Validates versioned field annotations for all types in the schema.
+///
+/// Checks that:
+/// - `since`, `deprecated`, `removed` are valid semver strings
+/// - Version ordering holds: `since <= deprecated.version <= removed`
+/// - Fields with `removed` have `optional: true`
+/// - `field_number` values are unique within each type
+pub fn validate_versioned_field_annotations(
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    for (type_name, type_schema) in types {
+        let Some(obj) = type_schema.as_object() else {
+            continue;
+        };
+        let Some(props) = obj.get("properties").and_then(JsonValue::as_object) else {
+            continue;
+        };
+
+        let mut seen_field_numbers: BTreeMap<u64, String> = BTreeMap::new();
+        for (prop_name, prop_schema) in props {
+            let meta = parse_field_version_meta(prop_schema).map_err(|e| {
+                SyamlError::SchemaError(format!(
+                    "schema.{}.properties.{}: {}",
+                    type_name,
+                    prop_name,
+                    e
+                ))
+            })?;
+            if let Some(meta) = meta {
+                if let Some(fn_num) = meta.field_number {
+                    if let Some(existing) = seen_field_numbers.get(&fn_num) {
+                        return Err(SyamlError::SchemaError(format!(
+                            "schema.{}: duplicate field_number {} on properties '{}' and '{}'",
+                            type_name, fn_num, existing, prop_name
+                        )));
+                    }
+                    seen_field_numbers.insert(fn_num, prop_name.clone());
+                }
+            }
+        }
+    }
+    Ok(())
 }

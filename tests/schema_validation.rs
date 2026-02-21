@@ -3,12 +3,13 @@ use std::collections::BTreeMap;
 use serde_json::json;
 
 use super_yaml::schema::{
-    parse_schema, resolve_type_schema, validate_json_against_schema,
+    parse_field_version_meta, parse_schema, resolve_type_schema, validate_json_against_schema,
     validate_json_against_schema_with_types, validate_schema_type_references,
 };
 use super_yaml::validate::{
     build_effective_constraints, validate_constraints, validate_type_hints,
 };
+use super_yaml::{compile_document, MapEnvProvider};
 
 #[test]
 fn parse_schema_treats_top_level_keys_as_types() {
@@ -1809,4 +1810,264 @@ fn parse_schema_normalizes_pipe_shorthand_with_named_types() {
     assert_eq!(options[1]["type"], json!("Hostname"));
 
     validate_schema_type_references(&schema.types).unwrap();
+}
+
+// ── Versioned field annotation tests ─────────────────────────────────────────
+
+fn no_env() -> MapEnvProvider {
+    MapEnvProvider::new(std::collections::HashMap::new())
+}
+
+#[test]
+fn versioned_field_valid_annotations() {
+    let raw = json!({
+        "Item": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "integer", "field_number": 1, "since": "1.0.0" },
+                "name": { "type": "string", "field_number": 2, "since": "1.0.0",
+                          "deprecated": "2.0.0", "optional": true },
+                "old": { "type": "string", "field_number": 3, "since": "1.0.0",
+                         "removed": "3.0.0", "optional": true }
+            }
+        }
+    });
+    parse_schema(&raw).unwrap();
+}
+
+#[test]
+fn versioned_field_since_not_semver() {
+    let raw = json!({
+        "Item": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "integer", "since": "banana" }
+            }
+        }
+    });
+    let err = parse_schema(&raw).unwrap_err();
+    assert!(err.to_string().contains("since"), "expected 'since' in error: {err}");
+}
+
+#[test]
+fn versioned_field_ordering_violation() {
+    // since > deprecated.version — violates ordering
+    let raw = json!({
+        "Item": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "since": "2.0.0",
+                        "deprecated": "1.0.0", "optional": true }
+            }
+        }
+    });
+    let err = parse_schema(&raw).unwrap_err();
+    assert!(err.to_string().contains("ordering"), "expected ordering error: {err}");
+}
+
+#[test]
+fn versioned_field_removed_requires_optional() {
+    let raw = json!({
+        "Item": {
+            "type": "object",
+            "properties": {
+                "gone": { "type": "string", "since": "1.0.0", "removed": "2.0.0" }
+            }
+        }
+    });
+    let err = parse_schema(&raw).unwrap_err();
+    assert!(err.to_string().contains("optional"), "expected optional error: {err}");
+}
+
+#[test]
+fn versioned_field_duplicate_field_number() {
+    let raw = json!({
+        "Item": {
+            "type": "object",
+            "properties": {
+                "a": { "type": "string", "field_number": 1 },
+                "b": { "type": "string", "field_number": 1 }
+            }
+        }
+    });
+    let err = parse_schema(&raw).unwrap_err();
+    assert!(err.to_string().contains("duplicate field_number"), "expected duplicate error: {err}");
+}
+
+#[test]
+fn versioned_field_deprecated_object_form() {
+    let schema = json!({
+        "type": "string",
+        "deprecated": {
+            "version": "2.0.0",
+            "severity": "error",
+            "message": "Use something else"
+        },
+        "optional": true
+    });
+    let meta = parse_field_version_meta(&schema).unwrap().unwrap();
+    let dep = meta.deprecated.unwrap();
+    assert_eq!(dep.version.to_string(), "2.0.0");
+    assert_eq!(dep.severity, super_yaml::schema::DeprecationSeverity::Error);
+    assert_eq!(dep.message.as_deref(), Some("Use something else"));
+}
+
+#[test]
+fn versioned_field_deprecated_unknown_severity() {
+    let schema = json!({
+        "type": "string",
+        "deprecated": { "version": "2.0.0", "severity": "fatal" },
+        "optional": true
+    });
+    let err = parse_field_version_meta(&schema).unwrap_err();
+    assert!(err.to_string().contains("severity"), "expected severity error: {err}");
+}
+
+#[test]
+fn versioned_fields_since_blocks_old_version() {
+    let doc = r#"
+---!syaml/v0
+---meta
+file:
+  schema_version: "1.0.0"
+---schema
+Item:
+  type: object
+  properties:
+    new_field:
+      type: string
+      since: "2.0.0"
+      optional: true
+---data
+item <Item>:
+  new_field: hello
+"#;
+    let err = compile_document(doc, &no_env()).unwrap_err();
+    assert!(err.to_string().contains("not available until"), "expected since error: {err}");
+}
+
+#[test]
+fn versioned_fields_removed_blocks_new_version() {
+    let doc = r#"
+---!syaml/v0
+---meta
+file:
+  schema_version: "3.0.0"
+---schema
+Item:
+  type: object
+  properties:
+    gone:
+      type: string
+      since: "1.0.0"
+      removed: "3.0.0"
+      optional: true
+---data
+item <Item>:
+  gone: still_here
+"#;
+    let err = compile_document(doc, &no_env()).unwrap_err();
+    assert!(err.to_string().contains("removed in version"), "expected removed error: {err}");
+}
+
+#[test]
+fn versioned_fields_deprecated_returns_warning() {
+    let doc = r#"
+---!syaml/v0
+---meta
+file:
+  schema_version: "2.0.0"
+---schema
+Item:
+  type: object
+  properties:
+    old_field:
+      type: string
+      since: "1.0.0"
+      deprecated: "2.0.0"
+      optional: true
+---data
+item <Item>:
+  old_field: value
+"#;
+    let compiled = compile_document(doc, &no_env()).unwrap();
+    assert_eq!(compiled.warnings.len(), 1);
+    assert!(compiled.warnings[0].contains("deprecated"), "expected deprecation warning: {:?}", compiled.warnings);
+}
+
+#[test]
+fn versioned_fields_deprecated_error_severity() {
+    let doc = r#"
+---!syaml/v0
+---meta
+file:
+  schema_version: "2.0.0"
+---schema
+Item:
+  type: object
+  properties:
+    bad_field:
+      type: string
+      deprecated:
+        version: "2.0.0"
+        severity: error
+      optional: true
+---data
+item <Item>:
+  bad_field: value
+"#;
+    let err = compile_document(doc, &no_env()).unwrap_err();
+    assert!(err.to_string().contains("version field error"), "expected version field error: {err}");
+}
+
+#[test]
+fn versioned_fields_no_target_version_skips_checks() {
+    // No schema_version in meta.file → all version checks skipped
+    let doc = r#"
+---!syaml/v0
+---schema
+Item:
+  type: object
+  properties:
+    old_field:
+      type: string
+      deprecated: "1.0.0"
+      optional: true
+    future_field:
+      type: string
+      since: "99.0.0"
+      optional: true
+---data
+item <Item>:
+  old_field: value
+  future_field: value
+"#;
+    let compiled = compile_document(doc, &no_env()).unwrap();
+    assert!(compiled.warnings.is_empty(), "expected no warnings without schema_version");
+}
+
+#[test]
+fn versioned_fields_absent_deprecated_no_warning() {
+    // Deprecated field is NOT present in data → no warning
+    let doc = r#"
+---!syaml/v0
+---meta
+file:
+  schema_version: "2.0.0"
+---schema
+Item:
+  type: object
+  properties:
+    name:
+      type: string
+    old_field:
+      type: string
+      deprecated: "2.0.0"
+      optional: true
+---data
+item <Item>:
+  name: Alice
+"#;
+    let compiled = compile_document(doc, &no_env()).unwrap();
+    assert!(compiled.warnings.is_empty(), "expected no warning when deprecated field is absent");
 }

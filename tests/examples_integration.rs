@@ -35,6 +35,7 @@ fn all_examples_compile_to_expected_json() {
         "vm_resource",
         "template_service",
         "rest_api",
+        "versioned_fields",
     ];
 
     for case in cases {
@@ -66,6 +67,7 @@ fn all_examples_validate_successfully() {
         "vm_resource",
         "template_service",
         "rest_api",
+        "versioned_fields",
     ];
 
     for case in cases {

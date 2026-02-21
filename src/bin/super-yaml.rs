@@ -2,8 +2,7 @@ use std::{collections::HashSet, env, path::PathBuf, process::ExitCode};
 
 use super_yaml::{
     compile_document_from_path_with_fetch, generate_rust_types_from_path,
-    generate_typescript_types_from_path, validate_document_from_path, EnvProvider,
-    ProcessEnvProvider,
+    generate_typescript_types_from_path, EnvProvider, ProcessEnvProvider,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -90,7 +89,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
 }
 
 fn run_validate(file: &PathBuf, env: &dyn EnvProvider) -> Result<(), String> {
-    validate_document_from_path(file, env).map_err(|e| e.to_string())?;
+    let compiled = super_yaml::compile_document_from_path(file, env).map_err(|e| e.to_string())?;
+    for warning in &compiled.warnings {
+        eprintln!("warning: {warning}");
+    }
     println!("OK");
     Ok(())
 }
@@ -104,14 +106,22 @@ fn run_compile(
     update_imports: bool,
 ) -> Result<(), String> {
     let output = match format {
-        OutputFormat::Json => compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
-            .map_err(|e| e.to_string())?
-            .to_json_string(pretty),
-        OutputFormat::Yaml => Ok(
-            compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
-                .map_err(|e| e.to_string())?
-                .to_yaml_string(),
-        ),
+        OutputFormat::Json => {
+            let compiled = compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
+                .map_err(|e| e.to_string())?;
+            for warning in &compiled.warnings {
+                eprintln!("warning: {warning}");
+            }
+            compiled.to_json_string(pretty)
+        }
+        OutputFormat::Yaml => {
+            let compiled = compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
+                .map_err(|e| e.to_string())?;
+            for warning in &compiled.warnings {
+                eprintln!("warning: {warning}");
+            }
+            Ok(compiled.to_yaml_string())
+        }
         OutputFormat::Rust => generate_rust_types_from_path(file),
         OutputFormat::TypeScript => generate_typescript_types_from_path(file),
     }

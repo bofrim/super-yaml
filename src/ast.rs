@@ -25,6 +25,9 @@ pub struct ParsedDocument {
 pub struct CompiledDocument {
     /// Resolved JSON value after env + expression resolution and validation.
     pub value: JsonValue,
+    /// Non-fatal diagnostic messages collected during compilation (e.g. deprecation warnings).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl CompiledDocument {
