@@ -1,8 +1,38 @@
 ---!syaml/v0
 ---meta
 file:
-  schema_version: "2.0.0"
+  schema_version: "2.1.0"
 ---schema
+# Address type — introduced in v1.5.0 when user location support was added.
+Address:
+  type: object
+  properties:
+    street:
+      type: string
+      field_number: 1
+      since: "1.5.0"
+    city:
+      type: string
+      field_number: 2
+      since: "1.5.0"
+    zip:
+      type: string
+      field_number: 3
+      since: "1.5.0"
+    country_code:
+      type: string
+      field_number: 4
+      since: "2.0.0"
+      optional: true
+
+# UserProfile — the core identity type, evolved over three releases.
+#
+#  v1.0.0  id, name, email, phone, username, old_id
+#  v1.5.0  username deprecated (name is the canonical field)
+#          home_address added
+#  v2.0.0  phone deprecated (only email is contact info now)
+#          old_id removed (migrated to integer id)
+#          avatar_url added
 UserProfile:
   type: object
   properties:
@@ -18,30 +48,99 @@ UserProfile:
       type: string
       field_number: 3
       since: "1.0.0"
+    phone:
+      type: string
+      field_number: 4
+      since: "1.0.0"
+      deprecated:
+        version: "2.0.0"
+        severity: warning
+        message: "Contact by email only; phone field will be removed in v3.0"
+      optional: true
     avatar_url:
       type: string
       field_number: 5
       since: "2.0.0"
       optional: true
-    legacy_name:
-      type: string
+    home_address:
+      type: Address
       field_number: 6
-      since: "1.0.0"
-      deprecated:
-        version: "2.0.0"
-        severity: warning
-        message: "Use 'name' instead"
+      since: "1.5.0"
       optional: true
-    old_id:
+    username:
       type: string
       field_number: 7
       since: "1.0.0"
+      deprecated: "1.5.0"
+      optional: true
+    old_id:
+      type: string
+      field_number: 8
+      since: "1.0.0"
       removed: "2.0.0"
       optional: true
+
+# BlogPost — added in v2.0.0 when the blogging feature shipped.
+# In v2.1.0 the `draft_title` staging field was superseded by `title`.
+BlogPost:
+  type: object
+  properties:
+    id:
+      type: integer
+      field_number: 1
+      since: "2.0.0"
+    title:
+      type: string
+      field_number: 2
+      since: "2.0.0"
+    author_id:
+      type: integer
+      field_number: 3
+      since: "2.0.0"
+    content:
+      type: string
+      field_number: 4
+      since: "2.0.0"
+    draft_title:
+      type: string
+      field_number: 5
+      since: "2.0.0"
+      deprecated:
+        version: "2.1.0"
+        severity: warning
+        message: "Use title instead"
+      optional: true
+    views:
+      type: integer
+      field_number: 6
+      since: "2.1.0"
+      optional: true
 ---data
-user <UserProfile>:
-  id: 42
+# alice uses two deprecated fields (phone, username) → two deprecation warnings.
+alice <UserProfile>:
+  id: 1
   name: Alice
   email: alice@example.com
   avatar_url: https://example.com/alice.png
-  legacy_name: alice_old
+  home_address:
+    street: "123 Main St"
+    city: Springfield
+    zip: "12345"
+    country_code: US
+  phone: "555-0100"
+  username: alice42
+
+# bob omits all deprecated/removed fields → no warnings.
+bob <UserProfile>:
+  id: 2
+  name: Bob
+  email: bob@example.com
+
+# featured_post uses the deprecated draft_title field → one deprecation warning.
+featured_post <BlogPost>:
+  id: 101
+  title: "Getting Started with super-yaml"
+  author_id: 1
+  content: "super-yaml is a powerful configuration language..."
+  views: 1024
+  draft_title: "Getting Started"

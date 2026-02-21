@@ -1,9 +1,29 @@
 {
-  "user": {
+  "alice": {
     "avatar_url": "https://example.com/alice.png",
     "email": "alice@example.com",
-    "id": 42,
-    "legacy_name": "alice_old",
-    "name": "Alice"
+    "home_address": {
+      "city": "Springfield",
+      "country_code": "US",
+      "street": "123 Main St",
+      "zip": "12345"
+    },
+    "id": 1,
+    "name": "Alice",
+    "phone": "555-0100",
+    "username": "alice42"
+  },
+  "bob": {
+    "email": "bob@example.com",
+    "id": 2,
+    "name": "Bob"
+  },
+  "featured_post": {
+    "author_id": 1,
+    "content": "super-yaml is a powerful configuration language...",
+    "draft_title": "Getting Started",
+    "id": 101,
+    "title": "Getting Started with super-yaml",
+    "views": 1024
   }
 }
