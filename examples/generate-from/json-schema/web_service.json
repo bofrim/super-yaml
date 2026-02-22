@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WebService",
+  "description": "Configuration for a web service deployment",
+  "$defs": {
+    "LogLevel": {
+      "description": "Severity level for log output",
+      "enum": ["debug", "info", "warn", "error"]
+    },
+    "Port": {
+      "description": "A valid TCP port number",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "DatabaseConfig": {
+      "description": "Relational database connection settings",
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Hostname or IP of the database server"
+        },
+        "port": { "$ref": "#/$defs/Port" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63
+        },
+        "max_connections": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "ssl": {
+          "type": "boolean"
+        }
+      },
+      "required": ["host", "port", "name"]
+    },
+    "TlsConfig": {
+      "description": "TLS/HTTPS settings",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "cert_file": { "type": "string" },
+        "key_file": { "type": "string" }
+      },
+      "required": ["enabled"]
+    },
+    "HealthCheck": {
+      "description": "HTTP health-check probe configuration",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        }
+      },
+      "required": ["path"]
+    }
+  },
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique service identifier",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "port": { "$ref": "#/$defs/Port" },
+    "log_level": { "$ref": "#/$defs/LogLevel" },
+    "database": { "$ref": "#/$defs/DatabaseConfig" },
+    "tls": { "$ref": "#/$defs/TlsConfig" },
+    "health_check": { "$ref": "#/$defs/HealthCheck" },
+    "tags": {
+      "type": "array",
+      "description": "Arbitrary key-value metadata tags",
+      "items": { "type": "string" }
+    },
+    "replicas": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 128
+    }
+  },
+  "required": ["name", "port", "log_level", "database"]
+}

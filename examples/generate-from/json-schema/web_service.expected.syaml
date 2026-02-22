@@ -1,0 +1,76 @@
+---!syaml/v0
+---schema
+# A valid TCP port number
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+
+# Relational database connection settings
+DatabaseConfig:
+  type: object
+  properties:
+    host: string
+    max_connections:
+      type: integer
+      optional: true
+      minimum: 1
+      maximum: 1000
+    name:
+      type: string
+      minLength: 1
+      maxLength: 63
+    port: Port
+    ssl: boolean?
+
+# HTTP health-check probe configuration
+HealthCheck:
+  type: object
+  properties:
+    interval_seconds:
+      type: integer
+      optional: true
+      minimum: 1
+      maximum: 300
+    path:
+      type: string
+      pattern: "^/"
+    timeout_seconds:
+      type: integer
+      optional: true
+      minimum: 1
+      maximum: 60
+
+# Severity level for log output
+LogLevel: [debug, info, warn, error]
+
+# TLS/HTTPS settings
+TlsConfig:
+  type: object
+  properties:
+    cert_file: string?
+    enabled: boolean
+    key_file: string?
+
+# Configuration for a web service deployment
+WebService:
+  type: object
+  properties:
+    database: DatabaseConfig
+    health_check: HealthCheck?
+    log_level: LogLevel
+    name:
+      type: string
+      minLength: 1
+      maxLength: 64
+    port: Port
+    replicas:
+      type: integer
+      optional: true
+      minimum: 1
+      maximum: 128
+    tags:
+      type: array
+      optional: true
+      items: string
+    tls: TlsConfig?

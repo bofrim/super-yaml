@@ -1,10 +1,10 @@
-use std::{collections::HashSet, env, path::PathBuf, process::ExitCode};
+use std::{collections::HashSet, env, path::{Path, PathBuf}, process::ExitCode};
 
 use super_yaml::{
-    compile_document_from_path_with_fetch, generate_proto_types_from_path,
-    generate_rust_types_and_data_from_path, generate_rust_types_from_path,
-    generate_typescript_types_and_data_from_path, generate_typescript_types_from_path, EnvProvider,
-    ProcessEnvProvider,
+    compile_document_from_path_with_fetch, from_json_schema_path,
+    generate_proto_types_from_path, generate_rust_types_and_data_from_path,
+    generate_rust_types_from_path, generate_typescript_types_and_data_from_path,
+    generate_typescript_types_from_path, EnvProvider, ProcessEnvProvider,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -63,11 +63,25 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
-    if args.len() < 3 {
+    if args.len() < 2 {
         return Err("not enough arguments".to_string());
     }
 
     let command = args[1].as_str();
+
+    if command == "from-json-schema" {
+        if args.len() < 3 {
+            return Err("from-json-schema requires an input file".to_string());
+        }
+        let file = PathBuf::from(&args[2]);
+        let output_path = parse_from_json_schema_options(&args[3..])?;
+        return run_from_json_schema(&file, output_path.as_deref());
+    }
+
+    if args.len() < 3 {
+        return Err("not enough arguments".to_string());
+    }
+
     let file = PathBuf::from(&args[2]);
 
     match command {
@@ -273,8 +287,40 @@ fn parse_allow_env_option(
     Ok(())
 }
 
+fn parse_from_json_schema_options(args: &[String]) -> Result<Option<PathBuf>, String> {
+    let mut output: Option<PathBuf> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output" => {
+                if i + 1 >= args.len() {
+                    return Err("missing value for --output".to_string());
+                }
+                output = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            other => return Err(format!("unknown option '{other}'")),
+        }
+    }
+    Ok(output)
+}
+
+fn run_from_json_schema(file: &PathBuf, output: Option<&Path>) -> Result<(), String> {
+    let syaml = from_json_schema_path(file).map_err(|e| e.to_string())?;
+    match output {
+        Some(path) => {
+            std::fs::write(path, &syaml).map_err(|e| format!("failed to write output: {e}"))
+        }
+        None => {
+            print!("{syaml}");
+            Ok(())
+        }
+    }
+}
+
 fn print_usage() {
     eprintln!("usage:");
+    eprintln!("  super-yaml from-json-schema <schema.json> [--output <file.syaml>]");
     eprintln!("  super-yaml validate <file> [--allow-env KEY]...");
     eprintln!(
         "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript|proto] [--allow-env KEY]..."

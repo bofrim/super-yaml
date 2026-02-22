@@ -5,7 +5,8 @@ use std::path::Path;
 use serde_json::{json, Value as JsonValue};
 
 use super_yaml::{
-    compile_document, compile_document_from_path, validate_document_from_path, MapEnvProvider,
+    compile_document, compile_document_from_path, from_json_schema_path,
+    validate_document_from_path, MapEnvProvider,
 };
 
 fn read_fixture(path: &str) -> String {
@@ -72,6 +73,90 @@ fn all_examples_validate_successfully() {
 
     for case in cases {
         validate_document_from_path(format!("examples/{case}.syaml"), &env_provider(&[])).unwrap();
+    }
+}
+
+#[test]
+fn generate_from_examples_match_expected() {
+    // Walk examples/generate-from/<source-type>/ directories.
+    // Each subdirectory name determines the conversion to apply.
+    // Convention:
+    //   - json-schema/  → from_json_schema_path(<name>.json) vs <name>.expected.syaml
+    //
+    // To add a new source type, create a new subdirectory and add a match arm below.
+
+    let generate_from = Path::new("examples/generate-from");
+    let mut entries: Vec<_> = fs::read_dir(generate_from)
+        .expect("examples/generate-from directory not found")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    assert!(
+        !entries.is_empty(),
+        "examples/generate-from has no subdirectories"
+    );
+
+    for dir_entry in entries {
+        let source_type = dir_entry.file_name();
+        let source_type = source_type.to_string_lossy();
+        let dir = dir_entry.path();
+
+        // Collect input files for this source type.
+        let mut inputs: Vec<_> = fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                !name.contains(".expected.")
+            })
+            .collect();
+        inputs.sort_by_key(|e| e.file_name());
+
+        for input_entry in inputs {
+            let input_path = input_entry.path();
+            let stem = input_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            let actual = match source_type.as_ref() {
+                "json-schema" => {
+                    assert_eq!(
+                        input_path.extension().and_then(|e| e.to_str()),
+                        Some("json"),
+                        "json-schema inputs must be .json files, got: {}",
+                        input_path.display()
+                    );
+                    from_json_schema_path(&input_path).unwrap_or_else(|e| {
+                        panic!(
+                            "from_json_schema_path failed for {}: {e}",
+                            input_path.display()
+                        )
+                    })
+                }
+                other => panic!(
+                    "unknown generate-from source type '{other}'; add a match arm in the test"
+                ),
+            };
+
+            let expected_path = dir.join(format!("{stem}.expected.syaml"));
+            let expected = fs::read_to_string(&expected_path).unwrap_or_else(|_| {
+                panic!(
+                    "missing expected file: {} (run the conversion and save the output there)",
+                    expected_path.display()
+                )
+            });
+
+            assert_eq!(
+                actual, expected,
+                "generate-from/{source_type}/{stem}: output does not match {}",
+                expected_path.display()
+            );
+        }
     }
 }
 

@@ -45,6 +45,8 @@ pub mod type_hints;
 pub mod typescript_codegen;
 /// Proto3 file generation from named schema definitions.
 pub mod proto_codegen;
+/// JSON Schema to super_yaml schema conversion.
+pub mod json_schema_import;
 /// Constraint and type-hint validation routines.
 pub mod validate;
 /// Import integrity verification: hash, signature, and version checks.
@@ -78,6 +80,7 @@ pub use typescript_codegen::{
     generate_typescript_types_from_path,
 };
 pub use proto_codegen::{generate_proto_types, generate_proto_types_from_path};
+pub use json_schema_import::{from_json_schema, from_json_schema_path};
 use validate::{
     build_effective_constraints, validate_constraints_with_imports, validate_type_hints,
     validate_versioned_fields,
