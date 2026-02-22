@@ -23,7 +23,12 @@
     "onCommand:syaml.previewTypeScript",
     "onCommand:syaml.previewProto",
     "onCommand:syaml.import.preview",
-    "onCommand:syaml.import.save"
+    "onCommand:syaml.import.save",
+    "onCommand:syaml.saveExpandedOutput",
+    "onCommand:syaml.saveJson",
+    "onCommand:syaml.saveRust",
+    "onCommand:syaml.saveTypeScript",
+    "onCommand:syaml.saveProto"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -90,6 +95,31 @@
       {
         "command": "syaml.import.save",
         "title": "SYAML: Import: Save as SYAML",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.saveExpandedOutput",
+        "title": "SYAML: Save Expanded Output (YAML)",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.saveJson",
+        "title": "SYAML: Save as JSON",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.saveRust",
+        "title": "SYAML: Save as Rust",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.saveTypeScript",
+        "title": "SYAML: Save as TypeScript",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.saveProto",
+        "title": "SYAML: Save as Protobuf",
         "category": "SYAML"
       }
     ],

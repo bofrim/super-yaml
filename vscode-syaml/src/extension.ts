@@ -140,6 +140,27 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(registerPreviewCommand("syaml.previewTypeScript", "typescript"));
   context.subscriptions.push(registerPreviewCommand("syaml.previewProto", "proto"));
 
+  const registerSaveCommand = (
+    commandId: string,
+    format: PreviewFormat
+  ): vscode.Disposable =>
+    vscode.commands.registerCommand(commandId, async () => {
+      const document = vscode.window.activeTextEditor?.document;
+      if (!document || !isSyamlDocument(document)) {
+        void vscode.window.showInformationMessage(
+          "Open a .syaml document to save generated output."
+        );
+        return;
+      }
+      await saveExpandedOutput(document, context.extensionPath, format);
+    });
+
+  context.subscriptions.push(registerSaveCommand("syaml.saveExpandedOutput", "yaml"));
+  context.subscriptions.push(registerSaveCommand("syaml.saveJson", "json"));
+  context.subscriptions.push(registerSaveCommand("syaml.saveRust", "rust"));
+  context.subscriptions.push(registerSaveCommand("syaml.saveTypeScript", "typescript"));
+  context.subscriptions.push(registerSaveCommand("syaml.saveProto", "proto"));
+
   context.subscriptions.push(
     vscode.commands.registerCommand("syaml.import.preview", async () => {
       const document = vscode.window.activeTextEditor?.document;
@@ -2129,6 +2150,79 @@ async function previewExpandedOutput(
     preview: true,
     viewColumn: vscode.ViewColumn.Beside
   });
+}
+
+async function saveExpandedOutput(
+  document: vscode.TextDocument,
+  extensionPath: string,
+  format: PreviewFormat = "yaml"
+): Promise<void> {
+  let parser: ParserCommand;
+  try {
+    parser = await resolveParserCommand(document, extensionPath);
+  } catch {
+    void vscode.window.showErrorMessage(
+      "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+    );
+    return;
+  }
+
+  const meta = PREVIEW_FORMAT_META[format];
+
+  // Compile first (handles unsaved/dirty documents via temp file).
+  const result = await withInputFile(document, async (inputPath) => {
+    const args = [...parser.argPrefix, "compile", inputPath, "--format", meta.cliFlag];
+    try {
+      const output = await execFileAsync(parser.command, args, {
+        cwd: parser.cwd,
+        timeout: 15000,
+        maxBuffer: 4 * 1024 * 1024
+      });
+      return { ok: true as const, content: output.stdout.toString() };
+    } catch (error) {
+      const execError = error as ExecError;
+      if (execError.code === "ENOENT") {
+        return {
+          ok: false as const,
+          message: "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+        };
+      }
+      const output = normalizeExecOutput(execError);
+      return { ok: false as const, message: extractDiagnosticMessage(output) };
+    }
+  });
+
+  if (!result.ok) {
+    void vscode.window.showErrorMessage(`SYAML compile failed: ${result.message}`);
+    return;
+  }
+
+  // Default save path: same directory and stem as the source .syaml file.
+  const defaultSavePath =
+    document.uri.scheme === "file"
+      ? path.join(
+          path.dirname(document.uri.fsPath),
+          `${path.basename(document.uri.fsPath, ".syaml")}${meta.ext}`
+        )
+      : undefined;
+
+  const saveUri = await vscode.window.showSaveDialog({
+    defaultUri: defaultSavePath ? vscode.Uri.file(defaultSavePath) : undefined,
+    filters: { [format.toUpperCase()]: [meta.ext.slice(1)] },
+    title: `Save SYAML output as ${format.toUpperCase()}`
+  });
+  if (!saveUri) {
+    return; // User cancelled.
+  }
+
+  const content = result.content.endsWith("\n") ? result.content : `${result.content}\n`;
+  await fs.writeFile(saveUri.fsPath, content, "utf8");
+
+  const savedDoc = await vscode.workspace.openTextDocument(saveUri);
+  await vscode.window.showTextDocument(savedDoc);
+  void vscode.window.showInformationMessage(
+    `SYAML: Saved to ${path.basename(saveUri.fsPath)}`
+  );
 }
 
 async function resolveParserCommand(
