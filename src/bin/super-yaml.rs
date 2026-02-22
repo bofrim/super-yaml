@@ -1,8 +1,9 @@
 use std::{collections::HashSet, env, path::PathBuf, process::ExitCode};
 
 use super_yaml::{
-    compile_document_from_path_with_fetch, generate_rust_types_from_path,
-    generate_typescript_types_from_path, EnvProvider, ProcessEnvProvider,
+    compile_document_from_path_with_fetch, generate_proto_types_from_path,
+    generate_rust_types_from_path, generate_typescript_types_from_path, EnvProvider,
+    ProcessEnvProvider,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -11,6 +12,7 @@ enum OutputFormat {
     Yaml,
     Rust,
     TypeScript,
+    Proto,
 }
 
 #[derive(Debug)]
@@ -124,6 +126,7 @@ fn run_compile(
         }
         OutputFormat::Rust => generate_rust_types_from_path(file),
         OutputFormat::TypeScript => generate_typescript_types_from_path(file),
+        OutputFormat::Proto => generate_proto_types_from_path(file),
     }
     .map_err(|e| e.to_string())?;
 
@@ -173,10 +176,14 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 format = OutputFormat::Json;
                 i += 1;
             }
+            "--proto" => {
+                format = OutputFormat::Proto;
+                i += 1;
+            }
             "--format" => {
                 if i + 1 >= args.len() {
                     return Err(
-                        "missing value for --format (expected json, yaml, rust, ts, or typescript)"
+                        "missing value for --format (expected json, yaml, rust, ts, typescript, or proto)"
                             .to_string(),
                     );
                 }
@@ -185,9 +192,10 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                     "yaml" => OutputFormat::Yaml,
                     "rust" => OutputFormat::Rust,
                     "ts" | "typescript" => OutputFormat::TypeScript,
+                    "proto" => OutputFormat::Proto,
                     other => {
                         return Err(format!(
-                            "invalid --format value '{other}' (expected json, yaml, rust, ts, or typescript)"
+                            "invalid --format value '{other}' (expected json, yaml, rust, ts, typescript, or proto)"
                         ))
                     }
                 };
@@ -245,9 +253,9 @@ fn print_usage() {
     eprintln!("usage:");
     eprintln!("  super-yaml validate <file> [--allow-env KEY]...");
     eprintln!(
-        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript] [--allow-env KEY]..."
+        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript|proto] [--allow-env KEY]..."
     );
-    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts] [--allow-env KEY]...");
+    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts|--proto] [--allow-env KEY]...");
     eprintln!();
     eprintln!("import options:");
     eprintln!("  --update-imports       force re-fetch of all URL imports (bypass lockfile cache)");

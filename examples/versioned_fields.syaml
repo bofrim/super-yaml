@@ -2,6 +2,7 @@
 ---meta
 file:
   schema_version: "2.1.0"
+  strict_field_numbers: true
 ---schema
 # Address type — introduced in v1.5.0 when user location support was added.
 Address:

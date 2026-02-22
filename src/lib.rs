@@ -43,6 +43,8 @@ pub mod template;
 pub mod type_hints;
 /// TypeScript type generation from named schema definitions.
 pub mod typescript_codegen;
+/// Proto3 file generation from named schema definitions.
+pub mod proto_codegen;
 /// Constraint and type-hint validation routines.
 pub mod validate;
 /// Import integrity verification: hash, signature, and version checks.
@@ -65,11 +67,12 @@ use fetch::FetchContext;
 use resolve::{resolve_env_bindings, resolve_expressions_with_imports};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
 pub use rust_codegen::{generate_rust_types, generate_rust_types_from_path};
-use schema::{parse_schema, validate_schema_type_references};
+use schema::{parse_schema, validate_schema_type_references, validate_strict_field_numbers};
 use section_scanner::scan_sections;
 use template::expand_data_templates;
 use type_hints::normalize_data_with_hints;
 pub use typescript_codegen::{generate_typescript_types, generate_typescript_types_from_path};
+pub use proto_codegen::{generate_proto_types, generate_proto_types_from_path};
 use validate::{
     build_effective_constraints, validate_constraints_with_imports, validate_type_hints,
     validate_versioned_fields,
@@ -308,6 +311,16 @@ fn compile_parsed_document(
         merge_imports(meta, base_dir, &mut schema.types, &mut imported_data, ctx)?;
     }
     validate_schema_type_references(&schema.types)?;
+
+    let strict_field_numbers = parsed
+        .meta
+        .as_ref()
+        .and_then(|m| m.file.get("strict_field_numbers"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if strict_field_numbers {
+        validate_strict_field_numbers(&schema.types)?;
+    }
 
     let target_schema_version: Option<semver::Version> = parsed
         .meta

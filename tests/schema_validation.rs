@@ -2071,3 +2071,78 @@ item <Item>:
     let compiled = compile_document(doc, &no_env()).unwrap();
     assert!(compiled.warnings.is_empty(), "expected no warning when deprecated field is absent");
 }
+
+#[test]
+fn strict_field_numbers_passes_when_all_fields_have_numbers() {
+    let doc = r#"---!syaml/v0
+---meta
+file:
+  strict_field_numbers: true
+---schema
+Item:
+  type: object
+  properties:
+    id:
+      type: integer
+      field_number: 1
+    name:
+      type: string
+      field_number: 2
+---data
+item <Item>:
+  id: 42
+  name: Widget
+"#;
+    compile_document(doc, &no_env()).unwrap();
+}
+
+#[test]
+fn strict_field_numbers_errors_on_missing_field_number() {
+    let doc = r#"---!syaml/v0
+---meta
+file:
+  strict_field_numbers: true
+---schema
+Item:
+  type: object
+  properties:
+    id:
+      type: integer
+      field_number: 1
+    name:
+      type: string
+---data
+item <Item>:
+  id: 42
+  name: Widget
+"#;
+    let err = compile_document(doc, &no_env()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("strict_field_numbers") && msg.contains("name"),
+        "expected strict_field_numbers error for 'name', got: {msg}"
+    );
+}
+
+#[test]
+fn strict_field_numbers_skips_check_when_flag_is_false() {
+    let doc = r#"---!syaml/v0
+---meta
+file:
+  strict_field_numbers: false
+---schema
+Item:
+  type: object
+  properties:
+    id:
+      type: integer
+    name:
+      type: string
+---data
+item <Item>:
+  id: 42
+  name: Widget
+"#;
+    // No field_numbers and flag is false — should compile without error.
+    compile_document(doc, &no_env()).unwrap();
+}

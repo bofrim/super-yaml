@@ -1504,3 +1504,31 @@ pub fn validate_versioned_field_annotations(
     }
     Ok(())
 }
+
+/// Validates that every property of every object type in the registry has a `field_number`.
+///
+/// This is called when `meta.file.strict_field_numbers: true` is set. It covers all types
+/// including those merged from imported documents.
+pub fn validate_strict_field_numbers(types: &BTreeMap<String, JsonValue>) -> Result<(), SyamlError> {
+    for (type_name, type_schema) in types {
+        let Some(obj) = type_schema.as_object() else {
+            continue;
+        };
+        let Some(props) = obj.get("properties").and_then(JsonValue::as_object) else {
+            continue;
+        };
+        for (prop_name, prop_schema) in props {
+            let has_field_number = prop_schema
+                .as_object()
+                .and_then(|o| o.get("field_number"))
+                .is_some();
+            if !has_field_number {
+                return Err(SyamlError::SchemaError(format!(
+                    "strict_field_numbers: type '{}' property '{}' is missing a field_number",
+                    type_name, prop_name
+                )));
+            }
+        }
+    }
+    Ok(())
+}
