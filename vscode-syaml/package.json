@@ -21,7 +21,9 @@
     "onCommand:syaml.previewJson",
     "onCommand:syaml.previewRust",
     "onCommand:syaml.previewTypeScript",
-    "onCommand:syaml.previewProto"
+    "onCommand:syaml.previewProto",
+    "onCommand:syaml.import.preview",
+    "onCommand:syaml.import.save"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -78,6 +80,16 @@
       {
         "command": "syaml.previewProto",
         "title": "SYAML: Preview as Protobuf",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.import.preview",
+        "title": "SYAML: Import: Preview as SYAML",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.import.save",
+        "title": "SYAML: Import: Save as SYAML",
         "category": "SYAML"
       }
     ],

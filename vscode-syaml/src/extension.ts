@@ -47,6 +47,36 @@ const PREVIEW_FORMAT_META: Record<
   proto:      { cliFlag: "proto", ext: ".proto" }
 };
 
+// Import source formats: schema/definition languages that can be converted to .syaml.
+// Extend this union and IMPORT_SOURCE_META to support additional source formats.
+type ImportSourceFormat = "json-schema";
+
+const IMPORT_SOURCE_META: Record<
+  ImportSourceFormat,
+  { cliCommand: string; label: string; extensions: string[] }
+> = {
+  "json-schema": {
+    cliCommand: "from-json-schema",
+    label: "JSON Schema",
+    extensions: [".json"]
+  }
+};
+
+function detectImportSourceFormat(
+  document: vscode.TextDocument
+): ImportSourceFormat | undefined {
+  const ext = path.extname(document.uri.fsPath).toLowerCase();
+  for (const [format, meta] of Object.entries(IMPORT_SOURCE_META) as [
+    ImportSourceFormat,
+    (typeof IMPORT_SOURCE_META)[ImportSourceFormat]
+  ][]) {
+    if (meta.extensions.includes(ext)) {
+      return format;
+    }
+  }
+  return undefined;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const diagnostics = vscode.languages.createDiagnosticCollection("syaml");
   const validator = new SyamlValidator(diagnostics, context.extensionPath);
@@ -109,6 +139,32 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(registerPreviewCommand("syaml.previewRust", "rust"));
   context.subscriptions.push(registerPreviewCommand("syaml.previewTypeScript", "typescript"));
   context.subscriptions.push(registerPreviewCommand("syaml.previewProto", "proto"));
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("syaml.import.preview", async () => {
+      const document = vscode.window.activeTextEditor?.document;
+      if (!document) {
+        void vscode.window.showInformationMessage(
+          "Open a schema file to preview its SYAML conversion."
+        );
+        return;
+      }
+      await previewImportAsSyaml(document, context.extensionPath, previewProvider);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("syaml.import.save", async () => {
+      const document = vscode.window.activeTextEditor?.document;
+      if (!document) {
+        void vscode.window.showInformationMessage(
+          "Open a schema file to convert and save as SYAML."
+        );
+        return;
+      }
+      await saveImportAsSyaml(document, context.extensionPath);
+    })
+  );
 
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((doc) => validator.schedule(doc, "open_or_save"))
@@ -1858,6 +1914,162 @@ function isSyamlDocument(document: vscode.TextDocument): boolean {
     return false;
   }
   return document.uri.fsPath.endsWith(".syaml");
+}
+
+async function previewImportAsSyaml(
+  document: vscode.TextDocument,
+  extensionPath: string,
+  previewProvider: SyamlPreviewContentProvider
+): Promise<void> {
+  const sourceFormat = detectImportSourceFormat(document);
+  if (!sourceFormat) {
+    const supported = (
+      Object.values(IMPORT_SOURCE_META) as (typeof IMPORT_SOURCE_META)[ImportSourceFormat][]
+    )
+      .map((m) => `${m.label} (${m.extensions.join(", ")})`)
+      .join("; ");
+    void vscode.window.showInformationMessage(
+      `SYAML import preview: unsupported file type. Supported: ${supported}.`
+    );
+    return;
+  }
+
+  let parser: ParserCommand;
+  try {
+    parser = await resolveParserCommand(document, extensionPath);
+  } catch {
+    void vscode.window.showErrorMessage(
+      "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+    );
+    return;
+  }
+
+  const { cliCommand, label } = IMPORT_SOURCE_META[sourceFormat];
+
+  // Import commands always read from disk; the file must be saved.
+  if (document.uri.scheme !== "file") {
+    void vscode.window.showErrorMessage(
+      `SYAML import: file must be saved to disk before previewing.`
+    );
+    return;
+  }
+
+  let content: string;
+  try {
+    const output = await execFileAsync(
+      parser.command,
+      [...parser.argPrefix, cliCommand, document.uri.fsPath],
+      { cwd: parser.cwd, timeout: 15000, maxBuffer: 4 * 1024 * 1024 }
+    );
+    content = output.stdout.toString();
+  } catch (error) {
+    const execError = error as ExecError;
+    if (execError.code === "ENOENT") {
+      void vscode.window.showErrorMessage(
+        "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+      );
+      return;
+    }
+    const output = normalizeExecOutput(execError);
+    void vscode.window.showErrorMessage(
+      `SYAML import (${label}) failed: ${extractDiagnosticMessage(output)}`
+    );
+    return;
+  }
+
+  if (!content.endsWith("\n")) {
+    content += "\n";
+  }
+
+  const key = encodeURIComponent(document.uri.toString());
+  const previewUri = vscode.Uri.parse(`syaml-preview:/import/${key}.syaml`);
+  previewProvider.setContent(previewUri, content);
+
+  const previewDocument = await vscode.workspace.openTextDocument(previewUri);
+  await vscode.window.showTextDocument(previewDocument, {
+    preview: true,
+    viewColumn: vscode.ViewColumn.Beside
+  });
+}
+
+async function saveImportAsSyaml(
+  document: vscode.TextDocument,
+  extensionPath: string
+): Promise<void> {
+  const sourceFormat = detectImportSourceFormat(document);
+  if (!sourceFormat) {
+    const supported = (
+      Object.values(IMPORT_SOURCE_META) as (typeof IMPORT_SOURCE_META)[ImportSourceFormat][]
+    )
+      .map((m) => `${m.label} (${m.extensions.join(", ")})`)
+      .join("; ");
+    void vscode.window.showInformationMessage(
+      `SYAML import: unsupported file type. Supported: ${supported}.`
+    );
+    return;
+  }
+
+  if (document.uri.scheme !== "file") {
+    void vscode.window.showErrorMessage(
+      "SYAML import: file must be saved to disk before converting."
+    );
+    return;
+  }
+
+  let parser: ParserCommand;
+  try {
+    parser = await resolveParserCommand(document, extensionPath);
+  } catch {
+    void vscode.window.showErrorMessage(
+      "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+    );
+    return;
+  }
+
+  const { cliCommand, label } = IMPORT_SOURCE_META[sourceFormat];
+
+  // Default save path: same directory and stem, .syaml extension.
+  const sourceFsPath = document.uri.fsPath;
+  const defaultSavePath = path.join(
+    path.dirname(sourceFsPath),
+    `${path.basename(sourceFsPath, path.extname(sourceFsPath))}.syaml`
+  );
+
+  const saveUri = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(defaultSavePath),
+    filters: { SYAML: ["syaml"] },
+    title: `Save ${label} as SYAML`
+  });
+  if (!saveUri) {
+    return; // User cancelled.
+  }
+
+  try {
+    await execFileAsync(
+      parser.command,
+      [...parser.argPrefix, cliCommand, sourceFsPath, "--output", saveUri.fsPath],
+      { cwd: parser.cwd, timeout: 15000, maxBuffer: 4 * 1024 * 1024 }
+    );
+  } catch (error) {
+    const execError = error as ExecError;
+    if (execError.code === "ENOENT") {
+      void vscode.window.showErrorMessage(
+        "Cannot run SYAML parser. Set syaml.parser.path or install super-yaml."
+      );
+      return;
+    }
+    const output = normalizeExecOutput(execError);
+    void vscode.window.showErrorMessage(
+      `SYAML import (${label}) failed: ${extractDiagnosticMessage(output)}`
+    );
+    return;
+  }
+
+  const savedDoc = await vscode.workspace.openTextDocument(saveUri);
+  await vscode.window.showTextDocument(savedDoc);
+  void vscode.window.showInformationMessage(
+    `SYAML: Saved ${label} import to ${path.basename(saveUri.fsPath)}`
+  );
 }
 
 async function previewExpandedOutput(
