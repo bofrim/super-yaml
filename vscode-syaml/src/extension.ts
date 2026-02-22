@@ -34,6 +34,19 @@ interface ExecError extends Error {
   stderr?: string | Buffer;
 }
 
+type PreviewFormat = "yaml" | "json" | "rust" | "typescript" | "proto";
+
+const PREVIEW_FORMAT_META: Record<
+  PreviewFormat,
+  { cliFlag: string; ext: string }
+> = {
+  yaml:       { cliFlag: "yaml",  ext: ".yaml" },
+  json:       { cliFlag: "json",  ext: ".json" },
+  rust:       { cliFlag: "rust",  ext: ".rs"   },
+  typescript: { cliFlag: "ts",    ext: ".ts"   },
+  proto:      { cliFlag: "proto", ext: ".proto" }
+};
+
 export function activate(context: vscode.ExtensionContext): void {
   const diagnostics = vscode.languages.createDiagnosticCollection("syaml");
   const validator = new SyamlValidator(diagnostics, context.extensionPath);
@@ -76,8 +89,11 @@ export function activate(context: vscode.ExtensionContext): void {
       previewProvider
     )
   );
-  context.subscriptions.push(
-    vscode.commands.registerCommand("syaml.previewExpandedOutput", async () => {
+  const registerPreviewCommand = (
+    commandId: string,
+    format: PreviewFormat
+  ): vscode.Disposable =>
+    vscode.commands.registerCommand(commandId, async () => {
       const document = vscode.window.activeTextEditor?.document;
       if (!document || !isSyamlDocument(document)) {
         void vscode.window.showInformationMessage(
@@ -85,9 +101,14 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         return;
       }
-      await previewExpandedOutput(document, context.extensionPath, previewProvider);
-    })
-  );
+      await previewExpandedOutput(document, context.extensionPath, previewProvider, format);
+    });
+
+  context.subscriptions.push(registerPreviewCommand("syaml.previewExpandedOutput", "yaml"));
+  context.subscriptions.push(registerPreviewCommand("syaml.previewJson", "json"));
+  context.subscriptions.push(registerPreviewCommand("syaml.previewRust", "rust"));
+  context.subscriptions.push(registerPreviewCommand("syaml.previewTypeScript", "typescript"));
+  context.subscriptions.push(registerPreviewCommand("syaml.previewProto", "proto"));
 
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((doc) => validator.schedule(doc, "open_or_save"))
@@ -1842,7 +1863,8 @@ function isSyamlDocument(document: vscode.TextDocument): boolean {
 async function previewExpandedOutput(
   document: vscode.TextDocument,
   extensionPath: string,
-  previewProvider: SyamlPreviewContentProvider
+  previewProvider: SyamlPreviewContentProvider,
+  format: PreviewFormat = "yaml"
 ): Promise<void> {
   let parser: ParserCommand;
   try {
@@ -1854,8 +1876,9 @@ async function previewExpandedOutput(
     return;
   }
 
+  const meta = PREVIEW_FORMAT_META[format];
   const result = await withInputFile(document, async (inputPath) => {
-    const args = [...parser.argPrefix, "compile", inputPath, "--format", "yaml"];
+    const args = [...parser.argPrefix, "compile", inputPath, "--format", meta.cliFlag];
     try {
       const output = await execFileAsync(parser.command, args, {
         cwd: parser.cwd,
@@ -1883,7 +1906,7 @@ async function previewExpandedOutput(
   }
 
   const key = encodeURIComponent(document.uri.toString());
-  const previewUri = vscode.Uri.parse(`syaml-preview:/${key}.yaml`);
+  const previewUri = vscode.Uri.parse(`syaml-preview:/${key}${meta.ext}`);
   const content = result.content.endsWith("\n")
     ? result.content
     : `${result.content}\n`;

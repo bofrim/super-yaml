@@ -17,7 +17,11 @@
   ],
   "activationEvents": [
     "onLanguage:syaml",
-    "onCommand:syaml.previewExpandedOutput"
+    "onCommand:syaml.previewExpandedOutput",
+    "onCommand:syaml.previewJson",
+    "onCommand:syaml.previewRust",
+    "onCommand:syaml.previewTypeScript",
+    "onCommand:syaml.previewProto"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -53,7 +57,27 @@
     "commands": [
       {
         "command": "syaml.previewExpandedOutput",
-        "title": "SYAML: Preview Expanded Output",
+        "title": "SYAML: Preview Expanded Output (YAML)",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.previewJson",
+        "title": "SYAML: Preview as JSON",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.previewRust",
+        "title": "SYAML: Preview as Rust",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.previewTypeScript",
+        "title": "SYAML: Preview as TypeScript",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.previewProto",
+        "title": "SYAML: Preview as Protobuf",
         "category": "SYAML"
       }
     ],
