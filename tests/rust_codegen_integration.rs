@@ -76,7 +76,9 @@ example: 1
 
     assert!(rendered.contains("pub enum MessageKind"));
     assert!(rendered.contains("pub struct WsMessage"));
-    assert!(rendered.contains("pub operator: String"));
+    // Inline enum `operator: [ema, derivative, rolling_mean]` is promoted to a named type.
+    assert!(rendered.contains("pub enum WsMessageOperator"));
+    assert!(rendered.contains("pub operator: WsMessageOperator"));
     assert!(rendered.contains("pub room_id: String"));
     assert!(rendered.contains("pub payload: Option<Value>"));
     assert!(rendered.contains("pub type Batch = Vec<WsMessage>;"));

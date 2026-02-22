@@ -1,0 +1,48 @@
+---!syaml/v0
+---schema
+
+# Named types — these round-trip perfectly through codegen today.
+Environment: [dev, staging, prod]
+
+DbPort:
+  type: integer
+  minimum: 1
+  maximum: 65535
+
+DbConfig:
+  type: object
+  properties:
+    host: string
+    port: DbPort
+
+# This type has two properties whose schemas are *inline* (no separate named type):
+#   - `metadata` uses an inline object schema → currently emits `pub metadata: Value`
+#   - `labels` uses an inline typed-dict schema → should work (values: string)
+#   - `env` uses an inline string enum → currently emits `pub env: String`
+ServiceConfig:
+  type: object
+  properties:
+    db: DbConfig
+    env: [dev, staging, prod]
+    metadata:
+      type: object
+      properties:
+        owner: string
+        tier: string
+    labels:
+      type: object
+      values: string
+      optional: true
+
+---data
+service <ServiceConfig>:
+  db:
+    host: db.internal
+    port: 5432
+  env: prod
+  metadata:
+    owner: platform
+    tier: critical
+  labels:
+    team: infra
+    region: us-east-1

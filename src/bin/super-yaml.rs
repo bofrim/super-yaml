@@ -2,7 +2,8 @@ use std::{collections::HashSet, env, path::PathBuf, process::ExitCode};
 
 use super_yaml::{
     compile_document_from_path_with_fetch, generate_proto_types_from_path,
-    generate_rust_types_from_path, generate_typescript_types_from_path, EnvProvider,
+    generate_rust_types_and_data_from_path, generate_rust_types_from_path,
+    generate_typescript_types_and_data_from_path, generate_typescript_types_from_path, EnvProvider,
     ProcessEnvProvider,
 };
 
@@ -22,6 +23,7 @@ struct CompileOptions {
     allowed_env_keys: HashSet<String>,
     cache_dir: Option<PathBuf>,
     update_imports: bool,
+    skip_data: bool,
 }
 
 /// Env provider that allows only explicitly listed process env keys.
@@ -84,6 +86,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 options.format,
                 options.cache_dir,
                 options.update_imports,
+                options.skip_data,
             )
         }
         _ => Err(format!("unknown command '{command}'")),
@@ -106,26 +109,41 @@ fn run_compile(
     format: OutputFormat,
     cache_dir: Option<PathBuf>,
     update_imports: bool,
+    skip_data: bool,
 ) -> Result<(), String> {
     let output = match format {
         OutputFormat::Json => {
-            let compiled = compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
-                .map_err(|e| e.to_string())?;
+            let compiled =
+                compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
+                    .map_err(|e| e.to_string())?;
             for warning in &compiled.warnings {
                 eprintln!("warning: {warning}");
             }
             compiled.to_json_string(pretty)
         }
         OutputFormat::Yaml => {
-            let compiled = compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
-                .map_err(|e| e.to_string())?;
+            let compiled =
+                compile_document_from_path_with_fetch(file, env, cache_dir, update_imports)
+                    .map_err(|e| e.to_string())?;
             for warning in &compiled.warnings {
                 eprintln!("warning: {warning}");
             }
             Ok(compiled.to_yaml_string())
         }
-        OutputFormat::Rust => generate_rust_types_from_path(file),
-        OutputFormat::TypeScript => generate_typescript_types_from_path(file),
+        OutputFormat::Rust => {
+            if skip_data {
+                generate_rust_types_from_path(file)
+            } else {
+                generate_rust_types_and_data_from_path(file, env)
+            }
+        }
+        OutputFormat::TypeScript => {
+            if skip_data {
+                generate_typescript_types_from_path(file)
+            } else {
+                generate_typescript_types_and_data_from_path(file, env)
+            }
+        }
         OutputFormat::Proto => generate_proto_types_from_path(file),
     }
     .map_err(|e| e.to_string())?;
@@ -152,6 +170,7 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
     let mut allowed_env_keys = HashSet::new();
     let mut cache_dir: Option<PathBuf> = None;
     let mut update_imports = false;
+    let mut skip_data = false;
     let mut i = 0usize;
 
     while i < args.len() {
@@ -206,6 +225,10 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 update_imports = true;
                 i += 1;
             }
+            "--skip-data" => {
+                skip_data = true;
+                i += 1;
+            }
             "--cache-dir" => {
                 if i + 1 >= args.len() {
                     return Err("missing value for --cache-dir".to_string());
@@ -225,6 +248,7 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
         allowed_env_keys,
         cache_dir,
         update_imports,
+        skip_data,
     })
 }
 
@@ -256,6 +280,9 @@ fn print_usage() {
         "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript|proto] [--allow-env KEY]..."
     );
     eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts|--proto] [--allow-env KEY]...");
+    eprintln!();
+    eprintln!("codegen options (--rust / --ts):");
+    eprintln!("  --skip-data            emit type definitions only; omit data constants/fns");
     eprintln!();
     eprintln!("import options:");
     eprintln!("  --update-imports       force re-fetch of all URL imports (bypass lockfile cache)");

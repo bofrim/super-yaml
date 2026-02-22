@@ -846,6 +846,132 @@ fn escape_string(raw: &str) -> String {
     raw.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+// ─── Data constants generation ────────────────────────────────────────────────
+
+/// Generates TypeScript types AND data constants from a `.syaml` file path.
+///
+/// The compiled (resolved) `---data` section is emitted as `export const` statements
+/// after the type definitions, separated by a `// --- Data ---` comment.
+pub fn generate_typescript_types_and_data_from_path(
+    path: impl AsRef<Path>,
+    env_provider: &dyn crate::EnvProvider,
+) -> Result<String, SyamlError> {
+    let path = path.as_ref();
+
+    // Parse to get type hints (path → schema type name).
+    let input = fs::read_to_string(path).map_err(|e| {
+        SyamlError::ImportError(format!("failed to read '{}': {e}", path.display()))
+    })?;
+    let parsed = parse_document(&input)?;
+    let type_hints = parsed.data.type_hints.clone();
+
+    // Collect schema types for type rendering and name resolution.
+    let mut ctx = TypeCollectionContext::new();
+    let schemas = collect_types_from_file(path, &mut ctx)?;
+    let type_names = build_type_name_map(&schemas.types);
+
+    // Compile to get resolved data values.
+    let compiled =
+        crate::compile_document_from_path_with_fetch(path, env_provider, None, false)?;
+
+    // Render types (existing logic).
+    let types_output = render_typescript_types(&schemas);
+
+    // Render data items.
+    let data_output = render_typescript_data(&compiled.value, &type_hints, &type_names);
+
+    if data_output.is_empty() {
+        return Ok(types_output);
+    }
+
+    Ok(format!("{types_output}\n// --- Data ---\n\n{data_output}"))
+}
+
+fn render_typescript_data(
+    data: &JsonValue,
+    type_hints: &BTreeMap<String, String>,
+    type_names: &BTreeMap<String, String>,
+) -> String {
+    let Some(obj) = data.as_object() else {
+        return String::new();
+    };
+    if obj.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    for (key, value) in obj {
+        let hint_path = format!("$.{key}");
+        let type_hint = type_hints.get(&hint_path).map(String::as_str);
+        let ts_type = data_ts_type(type_hint, value, type_names);
+        let var_name = to_camel_case_ts(key);
+        // JSON is valid TypeScript literal syntax.
+        let json_str = serde_json::to_string_pretty(value)
+            .unwrap_or_else(|_| "null".to_string());
+        out.push_str(&format!(
+            "export const {var_name}: {ts_type} = {json_str};\n\n"
+        ));
+    }
+    out
+}
+
+fn data_ts_type(
+    type_hint: Option<&str>,
+    value: &JsonValue,
+    type_names: &BTreeMap<String, String>,
+) -> String {
+    if let Some(hint) = type_hint {
+        match hint {
+            "string" => return "string".to_string(),
+            "integer" | "number" => return "number".to_string(),
+            "boolean" => return "boolean".to_string(),
+            other => {
+                if let Some(mapped) = type_names.get(other) {
+                    return mapped.clone();
+                }
+            }
+        }
+    }
+    // Infer from value when no type hint is available.
+    match value {
+        JsonValue::Bool(_) => "boolean".to_string(),
+        JsonValue::Number(_) => "number".to_string(),
+        JsonValue::String(_) => "string".to_string(),
+        JsonValue::Array(_) => "unknown[]".to_string(),
+        JsonValue::Object(_) => "Record<string, unknown>".to_string(),
+        JsonValue::Null => "null".to_string(),
+    }
+}
+
+/// Converts a raw key to camelCase for use as a TypeScript identifier.
+fn to_camel_case_ts(raw: &str) -> String {
+    let tokens = identifier_tokens(raw);
+    if tokens.is_empty() {
+        return "value".to_string();
+    }
+    let mut out = String::new();
+    for (i, token) in tokens.iter().enumerate() {
+        if i == 0 {
+            out.push_str(token);
+        } else {
+            let mut chars = token.chars();
+            if let Some(first) = chars.next() {
+                out.push(first.to_ascii_uppercase());
+                for ch in chars {
+                    out.push(ch);
+                }
+            }
+        }
+    }
+    if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        out = format!("var{out}");
+    }
+    if is_typescript_keyword(&out) {
+        out.push('_');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::{generate_typescript_types, render_typescript_types, CollectedSchemas};

@@ -66,12 +66,17 @@ pub use error::SyamlError;
 use fetch::FetchContext;
 use resolve::{resolve_env_bindings, resolve_expressions_with_imports};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
-pub use rust_codegen::{generate_rust_types, generate_rust_types_from_path};
+pub use rust_codegen::{
+    generate_rust_types, generate_rust_types_and_data_from_path, generate_rust_types_from_path,
+};
 use schema::{parse_schema, validate_schema_type_references, validate_strict_field_numbers};
 use section_scanner::scan_sections;
 use template::expand_data_templates;
 use type_hints::normalize_data_with_hints;
-pub use typescript_codegen::{generate_typescript_types, generate_typescript_types_from_path};
+pub use typescript_codegen::{
+    generate_typescript_types, generate_typescript_types_and_data_from_path,
+    generate_typescript_types_from_path,
+};
 pub use proto_codegen::{generate_proto_types, generate_proto_types_from_path};
 use validate::{
     build_effective_constraints, validate_constraints_with_imports, validate_type_hints,

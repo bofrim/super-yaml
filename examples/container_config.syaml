@@ -1,0 +1,202 @@
+---!syaml/v0
+---schema
+RestartPolicy: [no, always, on-failure, unless-stopped]
+
+Protocol: [tcp, udp]
+
+PortMapping:
+  type: object
+  properties:
+    host:
+      type: integer
+      minimum: 1
+      maximum: 65535
+    container:
+      type: integer
+      minimum: 1
+      maximum: 65535
+    protocol:
+      type: Protocol
+      optional: true
+  constructors:
+    with_protocol:
+      order: 1
+      regex: '^(?<host>\d+):(?<container>\d+)/(?<raw_protocol>\w+)$'
+      map:
+        host: { group: host, decode: integer }
+        container: { group: container, decode: integer }
+        protocol: { group: raw_protocol, from_enum: Protocol }
+    simple:
+      order: 2
+      regex: '^(?<host>\d+):(?<container>\d+)$'
+      map:
+        host: { group: host, decode: integer }
+        container: { group: container, decode: integer }
+      defaults:
+        protocol: tcp
+
+VolumeMode: [rw, ro]
+
+VolumeMount:
+  type: object
+  properties:
+    source: string
+    target: string
+    mode:
+      type: VolumeMode
+      optional: true
+  constructors:
+    with_mode:
+      order: 1
+      regex: '^(?<source>[^:]+):(?<target>[^:]+):(?<raw_mode>\w+)$'
+      map:
+        source: { group: source }
+        target: { group: target }
+        mode: { group: raw_mode, from_enum: VolumeMode }
+    without_mode:
+      order: 2
+      regex: '^(?<source>[^:]+):(?<target>[^:]+)$'
+      map:
+        source: { group: source }
+        target: { group: target }
+      defaults:
+        mode: rw
+
+MemUnit: [b, k, m, g]
+
+MemoryLimit:
+  type: object
+  properties:
+    amount: integer
+    unit: MemUnit
+  constraints:
+    - "amount >= 1"
+  constructors:
+    from_text:
+      regex: '^(?<amount>\d+)(?<raw_unit>[a-zA-Z]+)$'
+      map:
+        amount: { group: amount, decode: integer }
+        unit: { group: raw_unit, from_enum: MemUnit }
+
+CpuLimit:
+  type: number
+  minimum: 0.01
+  maximum: 128
+
+ResourceLimits:
+  type: object
+  properties:
+    cpus: CpuLimit
+    memory: MemoryLimit
+    memory_reservation: MemoryLimit?
+
+HealthCheck:
+  type: object
+  properties:
+    test:
+      type: array
+      items:
+        type: string
+    interval: string?
+    timeout: string?
+    retries:
+      type: integer
+      optional: true
+      minimum: 1
+    start_period: string?
+
+LogDriver: [json-file, syslog, journald, none]
+
+LogConfig:
+  type: object
+  properties:
+    driver: LogDriver
+    options:
+      type: object
+      values: string
+      optional: true
+
+ContainerService:
+  type: object
+  properties:
+    image: string
+    command:
+      type: array
+      items: { type: string }
+      optional: true
+    entrypoint:
+      type: array
+      items: { type: string }
+      optional: true
+    ports:
+      type: array
+      items: { type: PortMapping }
+      optional: true
+    volumes:
+      type: array
+      items: { type: VolumeMount }
+      optional: true
+    environment:
+      type: object
+      values: string
+      optional: true
+    expose:
+      type: array
+      items:
+        type: integer
+        minimum: 1
+        maximum: 65535
+      optional: true
+    depends_on:
+      type: array
+      items: { type: string }
+      optional: true
+    restart: RestartPolicy?
+    networks:
+      type: array
+      items: { type: string }
+      optional: true
+    resources: ResourceLimits?
+    healthcheck: HealthCheck?
+    logging: LogConfig?
+    labels:
+      type: object
+      values: string
+      optional: true
+    working_dir: string?
+    user: string?
+    hostname: string?
+    privileged: boolean?
+
+NetworkDriver: [bridge, overlay, host, none]
+
+NetworkDef:
+  type: object
+  properties:
+    driver: NetworkDriver?
+    external: boolean?
+    labels:
+      type: object
+      values: string
+      optional: true
+
+VolumeDef:
+  type: object
+  properties:
+    driver: string?
+    external: boolean?
+
+ContainerConfig:
+  type: object
+  properties:
+    services:
+      type: object
+      values: ContainerService
+    networks:
+      type: object
+      values: NetworkDef
+      optional: true
+    volumes:
+      type: object
+      values: VolumeDef
+      optional: true
