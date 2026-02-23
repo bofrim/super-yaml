@@ -827,7 +827,16 @@ function collectTypeDefinitions(document: vscode.TextDocument): TypeOccurrence[]
       continue;
     }
 
-    const type = parseTypeDefinitionName(rawKey);
+    // Try plain identifier first (e.g. `Animal:`), then extension syntax (e.g. `Dog <Animal>:`).
+    let type = parseTypeDefinitionName(rawKey);
+    let parentHint: { name: string; offset: number } | undefined;
+    if (!type) {
+      parentHint = parseTypeHint(rawKey);
+      if (parentHint) {
+        const basePart = rawKey.slice(0, rawKey.indexOf("<")).trimEnd();
+        type = parseTypeDefinitionName(basePart);
+      }
+    }
     if (!type) {
       continue;
     }
@@ -850,6 +859,17 @@ function collectTypeDefinitions(document: vscode.TextDocument): TypeOccurrence[]
       range: new vscode.Range(line, keyStart, line, keyStart + type.name.length),
       kind: "definition"
     });
+
+    // Emit the parent type as a navigable reference so cmd+click on `Animal`
+    // in `Dog <Animal>:` jumps to Animal's definition.
+    if (parentHint && !isBuiltinTypeName(parentHint.name)) {
+      const parentStart = indent + parentHint.offset;
+      occurrences.push({
+        name: parentHint.name,
+        range: new vscode.Range(line, parentStart, line, parentStart + parentHint.name.length),
+        kind: "reference"
+      });
+    }
   }
 
   return occurrences;
