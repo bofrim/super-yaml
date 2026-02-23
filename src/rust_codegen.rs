@@ -1476,4 +1476,114 @@ example: 1
         let rendered = render_rust_types(&schemas);
         assert!(rendered.contains("pub type Mixed = Value;"));
     }
+
+    #[test]
+    fn generates_constraint_functions_for_inline_numeric_keywords() {
+        let input = r#"
+---!syaml/v0
+---schema
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+---data
+port <Port>: 8080
+"#;
+        let rendered = generate_rust_types(input).unwrap();
+        assert!(
+            rendered.contains("check_port_constraints"),
+            "expected constraint function, got:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("value >= 1"),
+            "expected minimum expression, got:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("value <= 65535"),
+            "expected maximum expression, got:\n{}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn generates_constraint_functions_for_inline_string_length_keywords() {
+        let input = r#"
+---!syaml/v0
+---schema
+Tag:
+  type: string
+  minLength: 1
+  maxLength: 64
+---data
+tag <Tag>: hello
+"#;
+        let rendered = generate_rust_types(input).unwrap();
+        assert!(
+            rendered.contains("check_tag_constraints"),
+            "expected constraint function, got:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("len(value) >= 1"),
+            "expected minLength expression, got:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("len(value) <= 64"),
+            "expected maxLength expression, got:\n{}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn generates_constraint_functions_for_inline_array_item_count_keywords() {
+        let input = r#"
+---!syaml/v0
+---schema
+Tags:
+  type: array
+  items:
+    type: string
+  minItems: 1
+  maxItems: 10
+---data
+tags <Tags>:
+  - hello
+"#;
+        let rendered = generate_rust_types(input).unwrap();
+        assert!(
+            rendered.contains("check_tags_constraints"),
+            "expected constraint function, got:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("len(value) >= 1"),
+            "expected minItems expression, got:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("len(value) <= 10"),
+            "expected maxItems expression, got:\n{}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn inline_keywords_and_constraints_section_both_appear_in_generated_code() {
+        let input = r#"
+---!syaml/v0
+---schema
+Count:
+  type: integer
+  minimum: 0
+  constraints: "value != 42"
+---data
+count <Count>: 7
+"#;
+        let rendered = generate_rust_types(input).unwrap();
+        assert!(rendered.contains("value >= 0"), "missing minimum expr:\n{}", rendered);
+        assert!(rendered.contains("value != 42"), "missing explicit constraint:\n{}", rendered);
+    }
 }

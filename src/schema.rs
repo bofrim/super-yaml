@@ -59,6 +59,8 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
         }
     }
 
+    normalize_inline_schema_constraints(&types, &mut type_constraints);
+
     validate_versioned_field_annotations(&types)?;
 
     for (type_name, type_schema) in &types {
@@ -495,6 +497,101 @@ fn parse_type_local_constraints(
             "schema.{}.constraints must be string, list of strings, or mapping",
             type_name
         ))),
+    }
+}
+
+/// Converts inline JSON Schema keywords (`minimum`, `maxLength`, `minItems`,
+/// etc.) into expression strings and injects them into `type_constraints`.
+/// This allows inline schema constraint keywords to feed through the same
+/// constraint code generation pipeline as the explicit `constraints` section.
+fn normalize_inline_schema_constraints(
+    types: &BTreeMap<String, JsonValue>,
+    type_constraints: &mut BTreeMap<String, BTreeMap<String, Vec<String>>>,
+) {
+    for (type_name, schema) in types {
+        let mut injected: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        collect_inline_schema_exprs(schema, "$", &mut injected);
+        if !injected.is_empty() {
+            let entry = type_constraints.entry(type_name.clone()).or_default();
+            for (path, exprs) in injected {
+                entry.entry(path).or_default().extend(exprs);
+            }
+        }
+    }
+}
+
+/// Recursively walks a schema node and collects constraint expressions derived
+/// from inline JSON Schema keywords. Results are stored at the JSON path where
+/// each keyword was found, mirroring the path-mapped format used by the
+/// explicit `constraints` section.
+fn collect_inline_schema_exprs(
+    schema: &JsonValue,
+    path: &str,
+    out: &mut BTreeMap<String, Vec<String>>,
+) {
+    let Some(obj) = schema.as_object() else {
+        return;
+    };
+
+    let mut exprs = Vec::new();
+
+    if let Some(n) = obj.get("minimum").and_then(JsonValue::as_f64) {
+        exprs.push(format!("value >= {}", format_schema_number(n)));
+    }
+    if let Some(n) = obj.get("maximum").and_then(JsonValue::as_f64) {
+        exprs.push(format!("value <= {}", format_schema_number(n)));
+    }
+    if let Some(n) = obj.get("exclusiveMinimum").and_then(JsonValue::as_f64) {
+        exprs.push(format!("value > {}", format_schema_number(n)));
+    }
+    if let Some(n) = obj.get("exclusiveMaximum").and_then(JsonValue::as_f64) {
+        exprs.push(format!("value < {}", format_schema_number(n)));
+    }
+    // multipleOf uses integer modulo in the expression engine; skip non-integer divisors
+    if let Some(n) = obj.get("multipleOf").and_then(JsonValue::as_i64) {
+        if n > 0 {
+            exprs.push(format!("value % {} == 0", n));
+        }
+    }
+
+    if let Some(n) = obj.get("minLength").and_then(JsonValue::as_u64) {
+        exprs.push(format!("len(value) >= {}", n));
+    }
+    if let Some(n) = obj.get("maxLength").and_then(JsonValue::as_u64) {
+        exprs.push(format!("len(value) <= {}", n));
+    }
+    if let Some(n) = obj.get("minItems").and_then(JsonValue::as_u64) {
+        exprs.push(format!("len(value) >= {}", n));
+    }
+    if let Some(n) = obj.get("maxItems").and_then(JsonValue::as_u64) {
+        exprs.push(format!("len(value) <= {}", n));
+    }
+
+    if !exprs.is_empty() {
+        append_constraints(out, path, exprs);
+    }
+
+    // Recurse into object properties to handle constraints on nested fields
+    if let Some(props) = obj.get("properties").and_then(JsonValue::as_object) {
+        for (key, child_schema) in props {
+            let child_path = if path == "$" {
+                format!("$.{}", key)
+            } else {
+                format!("{}.{}", path, key)
+            };
+            collect_inline_schema_exprs(child_schema, &child_path, out);
+        }
+    }
+}
+
+/// Formats a float from a JSON Schema numeric keyword as an integer string when
+/// the value is whole, to produce clean expressions like `value >= 1` rather
+/// than `value >= 1`.
+fn format_schema_number(n: f64) -> String {
+    if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
     }
 }
 
@@ -1642,4 +1739,189 @@ pub fn resolve_mutability_for_path(
         }
     }
     Ok(MutabilityMode::Replace) // default: mutable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn parse(schema_json: serde_json::Value) -> SchemaDoc {
+        parse_schema(&schema_json).unwrap()
+    }
+
+    #[test]
+    fn numeric_keywords_produce_constraint_expressions() {
+        let schema = json!({
+            "Price": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 9999,
+                "exclusiveMinimum": -1,
+                "exclusiveMaximum": 10000
+            }
+        });
+        let doc = parse(schema);
+        let exprs = doc.type_constraints["Price"]["$"].clone();
+        assert!(exprs.contains(&"value >= 0".to_string()), "{:?}", exprs);
+        assert!(exprs.contains(&"value <= 9999".to_string()), "{:?}", exprs);
+        assert!(exprs.contains(&"value > -1".to_string()), "{:?}", exprs);
+        assert!(exprs.contains(&"value < 10000".to_string()), "{:?}", exprs);
+    }
+
+    #[test]
+    fn multiple_of_produces_modulo_expression() {
+        let schema = json!({
+            "EvenNum": {
+                "type": "integer",
+                "multipleOf": 2
+            }
+        });
+        let doc = parse(schema);
+        let exprs = &doc.type_constraints["EvenNum"]["$"];
+        assert!(
+            exprs.contains(&"value % 2 == 0".to_string()),
+            "{:?}",
+            exprs
+        );
+    }
+
+    #[test]
+    fn string_length_keywords_produce_len_expressions() {
+        let schema = json!({
+            "Tag": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+            }
+        });
+        let doc = parse(schema);
+        let exprs = &doc.type_constraints["Tag"]["$"];
+        assert!(
+            exprs.contains(&"len(value) >= 1".to_string()),
+            "{:?}",
+            exprs
+        );
+        assert!(
+            exprs.contains(&"len(value) <= 64".to_string()),
+            "{:?}",
+            exprs
+        );
+    }
+
+    #[test]
+    fn array_item_count_keywords_produce_len_expressions() {
+        let schema = json!({
+            "Tags": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "maxItems": 10
+            }
+        });
+        let doc = parse(schema);
+        let exprs = &doc.type_constraints["Tags"]["$"];
+        assert!(
+            exprs.contains(&"len(value) >= 1".to_string()),
+            "{:?}",
+            exprs
+        );
+        assert!(
+            exprs.contains(&"len(value) <= 10".to_string()),
+            "{:?}",
+            exprs
+        );
+    }
+
+    #[test]
+    fn nested_field_keywords_produce_path_mapped_expressions() {
+        let schema = json!({
+            "Config": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+                    "count": { "type": "integer", "minimum": 0, "maximum": 255 }
+                }
+            }
+        });
+        let doc = parse(schema);
+        let constraints = &doc.type_constraints["Config"];
+        let name_exprs = &constraints["$.name"];
+        assert!(
+            name_exprs.contains(&"len(value) >= 1".to_string()),
+            "{:?}",
+            name_exprs
+        );
+        assert!(
+            name_exprs.contains(&"len(value) <= 100".to_string()),
+            "{:?}",
+            name_exprs
+        );
+        let count_exprs = &constraints["$.count"];
+        assert!(
+            count_exprs.contains(&"value >= 0".to_string()),
+            "{:?}",
+            count_exprs
+        );
+        assert!(
+            count_exprs.contains(&"value <= 255".to_string()),
+            "{:?}",
+            count_exprs
+        );
+    }
+
+    #[test]
+    fn inline_keywords_coexist_with_explicit_constraints_section() {
+        let schema = json!({
+            "Port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "constraints": "value != 0"
+            }
+        });
+        let doc = parse(schema);
+        let exprs = &doc.type_constraints["Port"]["$"];
+        assert!(exprs.contains(&"value >= 1".to_string()), "{:?}", exprs);
+        assert!(exprs.contains(&"value <= 65535".to_string()), "{:?}", exprs);
+        assert!(exprs.contains(&"value != 0".to_string()), "{:?}", exprs);
+    }
+
+    #[test]
+    fn float_boundary_is_formatted_cleanly() {
+        let schema = json!({
+            "Rate": {
+                "type": "number",
+                "minimum": 0.5,
+                "maximum": 1.0
+            }
+        });
+        let doc = parse(schema);
+        let exprs = &doc.type_constraints["Rate"]["$"];
+        assert!(
+            exprs.contains(&"value >= 0.5".to_string()),
+            "{:?}",
+            exprs
+        );
+        assert!(
+            exprs.contains(&"value <= 1".to_string()),
+            "{:?}",
+            exprs
+        );
+    }
+
+    #[test]
+    fn type_with_no_inline_keywords_has_no_injected_constraints() {
+        let schema = json!({
+            "Label": {
+                "type": "string"
+            }
+        });
+        let doc = parse(schema);
+        assert!(
+            !doc.type_constraints.contains_key("Label"),
+            "expected no constraints, got {:?}",
+            doc.type_constraints
+        );
+    }
 }
