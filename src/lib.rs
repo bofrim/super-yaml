@@ -260,6 +260,7 @@ pub fn compile_document_to_json_schema(
 struct CompiledWithTypes {
     value: JsonValue,
     exported_types: BTreeMap<String, JsonValue>,
+    exported_type_constraints: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     warnings: Vec<String>,
 }
 
@@ -369,6 +370,7 @@ fn compile_module_manifest(
     let schema_sec = sections.iter().find(|s| s.name == "schema");
 
     let mut exported_types = BTreeMap::new();
+    let mut exported_type_constraints = BTreeMap::new();
     if let Some(sec) = schema_sec {
         let schema_val = parse_section_value("schema", &sec.body)?;
         let schema_doc = parse_schema(&schema_val)?;
@@ -381,16 +383,20 @@ fn compile_module_manifest(
             };
             let mut dummy_types = schema_doc.types.clone();
             let mut dummy_data = HashMap::new();
-            merge_imports(&manifest_meta, base_dir, &mut dummy_types, &mut dummy_data, ctx)?;
+            merge_imports(&manifest_meta, base_dir, &mut dummy_types, &mut BTreeMap::new(), &mut dummy_data, ctx)?;
             exported_types = dummy_types;
+            // For now, we don't merge type_constraints during manifest imports
+            exported_type_constraints = schema_doc.type_constraints;
         } else {
             exported_types = schema_doc.types;
+            exported_type_constraints = schema_doc.type_constraints;
         }
     }
 
     Ok(CompiledWithTypes {
         value: JsonValue::Object(serde_json::Map::new()),
         exported_types,
+        exported_type_constraints,
         warnings: Vec::new(),
     })
 }
@@ -509,7 +515,7 @@ fn compile_parsed_document(
     let mut imported_data = HashMap::new();
 
     let excluded_hints = if let Some(meta) = parsed.meta.as_ref() {
-        merge_imports(meta, base_dir, &mut schema.types, &mut imported_data, ctx)?
+        merge_imports(meta, base_dir, &mut schema.types, &mut schema.type_constraints, &mut imported_data, ctx)?
     } else {
         HashMap::new()
     };
@@ -572,6 +578,7 @@ fn compile_parsed_document(
     Ok(CompiledWithTypes {
         value: data,
         exported_types: schema.types,
+        exported_type_constraints: schema.type_constraints,
         warnings,
     })
 }
@@ -591,6 +598,7 @@ fn merge_imports(
     meta: &Meta,
     base_dir: &Path,
     type_registry: &mut BTreeMap<String, JsonValue>,
+    type_constraints: &mut BTreeMap<String, BTreeMap<String, Vec<String>>>,
     imported_data: &mut HashMap<String, JsonValue>,
     ctx: &mut CompileContext<'_>,
 ) -> Result<HashMap<String, String>, SyamlError> {
@@ -655,6 +663,7 @@ fn merge_imports(
 
         if imports_section(&binding.sections, "schema") {
             insert_imported_types(type_registry, alias, &imported.exported_types)?;
+            insert_imported_type_constraints(type_constraints, alias, &imported.exported_type_constraints)?;
         } else {
             for type_name in imported.exported_types.keys() {
                 excluded_hints.insert(
@@ -753,6 +762,29 @@ fn insert_imported_types(
 
         let rewritten = rewrite_schema_type_references(schema, &known_type_names, &rename_map);
         target_types.insert(prefixed_name.clone(), rewritten);
+    }
+
+    Ok(())
+}
+
+fn insert_imported_type_constraints(
+    target_constraints: &mut BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    alias: &str,
+    imported_constraints: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+) -> Result<(), SyamlError> {
+    if imported_constraints.is_empty() {
+        return Ok(());
+    }
+
+    for (type_name, constraints) in imported_constraints {
+        let prefixed_type_name = format!("{alias}.{type_name}");
+        if target_constraints.contains_key(&prefixed_type_name) {
+            return Err(SyamlError::ImportError(format!(
+                "imported type constraints for '{}' conflict with existing constraints for '{}'",
+                type_name, prefixed_type_name
+            )));
+        }
+        target_constraints.insert(prefixed_type_name, constraints.clone());
     }
 
     Ok(())

@@ -99,16 +99,16 @@ TimeRange:
   properties:
     start: IsoTime
     end: IsoTime
-  constraints:
-    - "end > start"
+  # constraints:
+  #   - "end > start"
 
 DateRange:
   type: object
   properties:
     start_date: IsoDate
     end_date: IsoDate
-  constraints:
-    - "end_date >= start_date"
+  # constraints:
+  #   - "end_date >= start_date"
 
 Schedule:
   type: object

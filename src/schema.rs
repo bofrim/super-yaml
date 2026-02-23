@@ -15,7 +15,7 @@ use serde_json::Value as JsonValue;
 
 use crate::ast::SchemaDoc;
 use crate::error::SyamlError;
-use crate::expr::{parse_expression, parser::Expr};
+use crate::expr::{parse_expression, parser::{Expr, BinaryOp}};
 
 const MAX_SCHEMA_VALIDATION_DEPTH: usize = 64;
 
@@ -937,10 +937,208 @@ fn validate_type_constraint_variable_scope(
                     )));
                 }
             }
+
+            // Validate constraint operations against schema types
+            validate_constraint_operations(&ast, scope_schema, expression, type_name, constraint_path, types)?;
         }
     }
 
     Ok(())
+}
+
+fn validate_constraint_operations(
+    expr: &Expr,
+    scope_schema: &JsonValue,
+    expression: &str,
+    type_name: &str,
+    constraint_path: &str,
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    use crate::expr::parser::BinaryOp;
+
+    match expr {
+        Expr::Binary { op, left, right } => {
+            match op {
+                BinaryOp::Lt | BinaryOp::Lte | BinaryOp::Gt | BinaryOp::Gte => {
+                    // Comparison operators require numeric operands
+                    // String comparisons are not allowed as they are unreliable and error-prone
+                    let left_type = infer_expression_type(left, scope_schema, types);
+                    let right_type = infer_expression_type(right, scope_schema, types);
+
+                    if !is_numeric_type(&left_type) || !is_numeric_type(&right_type) {
+                        return Err(SyamlError::SchemaError(format!(
+                            "constraint '{}' at schema.{} path '{}' uses '{}' operator with non-numeric types (left: {}, right: {})",
+                            expression, type_name, constraint_path, op_symbol(*op),
+                            left_type.as_deref().unwrap_or("unknown"), right_type.as_deref().unwrap_or("unknown")
+                        )));
+                    }
+                }
+                BinaryOp::Eq | BinaryOp::NotEq => {
+                    // Equality operators are generally allowed for any types
+                }
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                    // Arithmetic operators require numeric operands
+                    let left_type = infer_expression_type(left, scope_schema, types);
+
+                    let right_type = infer_expression_type(right, scope_schema, types);
+
+                    if !is_numeric_type(&left_type) || !is_numeric_type(&right_type) {
+                        return Err(SyamlError::SchemaError(format!(
+                            "constraint '{}' at schema.{} path '{}' uses '{}' operator with non-numeric types (left: {}, right: {})",
+                            expression, type_name, constraint_path, op_symbol(*op),
+                            left_type.as_deref().unwrap_or("unknown"), right_type.as_deref().unwrap_or("unknown")
+                        )));
+                    }
+                }
+                _ => {
+                    // Other operators are allowed
+                }
+            }
+
+            // Recursively validate sub-expressions
+            validate_constraint_operations(left, scope_schema, expression, type_name, constraint_path, types)?;
+            validate_constraint_operations(right, scope_schema, expression, type_name, constraint_path, types)?;
+        }
+        Expr::Unary { expr: inner, .. } => {
+            // Recursively validate inner expression
+            validate_constraint_operations(inner, scope_schema, expression, type_name, constraint_path, types)?;
+        }
+        Expr::Call { args, .. } => {
+            // Validate arguments
+            for arg in args {
+                validate_constraint_operations(arg, scope_schema, expression, type_name, constraint_path, types)?;
+            }
+        }
+        _ => {
+            // Other expression types don't need validation
+        }
+    }
+
+    Ok(())
+}
+
+fn infer_expression_type(
+    expr: &Expr,
+    scope_schema: &JsonValue,
+    types: &BTreeMap<String, JsonValue>,
+) -> Option<String> {
+
+    match expr {
+        Expr::Var(path) => {
+            if path.is_empty() {
+                return None;
+            }
+            let first = &path[0];
+            if first == "value" {
+                // This is the current value being constrained
+                return infer_schema_type(scope_schema, types);
+            } else {
+                // This is a property access
+                let mut current_schema = scope_schema;
+                for segment in path {
+                    if let Some(obj) = current_schema.as_object() {
+                        if let Some(props) = obj.get("properties") {
+                            if let Some(prop_schema) = props.as_object().and_then(|p| p.get(segment)) {
+                                current_schema = prop_schema;
+                                continue;
+                            }
+                        }
+                    }
+                    return None; // Path not found
+                }
+                return infer_schema_type(current_schema, types);
+            }
+        }
+        Expr::Binary { op, left, right } => {
+            let left_type = infer_expression_type(left, scope_schema, types);
+            let right_type = infer_expression_type(right, scope_schema, types);
+
+            match op {
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                    // Arithmetic operations result in numbers if both operands are numbers
+                    if is_numeric_type(&left_type) && is_numeric_type(&right_type) {
+                        Some("number".to_string())
+                    } else {
+                        None
+                    }
+                }
+                BinaryOp::Lt | BinaryOp::Lte | BinaryOp::Gt | BinaryOp::Gte => {
+                    // Comparison operations result in booleans
+                    Some("boolean".to_string())
+                }
+                BinaryOp::Eq | BinaryOp::NotEq => {
+                    // Equality operations result in booleans
+                    Some("boolean".to_string())
+                }
+                BinaryOp::And | BinaryOp::Or => {
+                    // Logical operations result in booleans
+                    Some("boolean".to_string())
+                }
+            }
+        }
+        Expr::Number(_) => Some("number".to_string()),
+        Expr::String(_) => Some("string".to_string()),
+        Expr::Bool(_) => Some("boolean".to_string()),
+        _ => None,
+    }
+}
+
+fn infer_schema_type(schema: &JsonValue, types: &BTreeMap<String, JsonValue>) -> Option<String> {
+    if let Some(type_val) = schema.as_object().and_then(|o| o.get("type")) {
+        if let Some(type_str) = type_val.as_str() {
+            // Check if this is a reference to a named type
+            if let Some(named_type) = types.get(type_str) {
+                return infer_schema_type(named_type, types);
+            } else if type_str.contains('.') {
+                // Handle imported types like "prim.NonNegativeInteger"
+                // For now, infer based on common patterns
+                if type_str.contains("Integer") {
+                    return Some("integer".to_string());
+                } else if type_str.contains("Number") {
+                    return Some("number".to_string());
+                } else if type_str.contains("String") {
+                    return Some("string".to_string());
+                }
+                // Unknown imported type
+                return None;
+            } else {
+                // It's a built-in type like "string", "number", etc.
+                return Some(type_str.to_string());
+            }
+        }
+    }
+    if let Some(ref_val) = schema.as_object().and_then(|o| o.get("$ref")) {
+        if let Some(ref_str) = ref_val.as_str() {
+            // Handle explicit type references
+            if let Some(referenced) = types.get(ref_str) {
+                return infer_schema_type(referenced, types);
+            }
+        }
+    }
+    None
+}
+
+fn is_numeric_type(type_name: &Option<String>) -> bool {
+    matches!(type_name.as_deref(), Some("number") | Some("integer"))
+}
+
+
+fn op_symbol(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Mod => "%",
+        BinaryOp::Eq => "==",
+        BinaryOp::NotEq => "!=",
+        BinaryOp::Lt => "<",
+        BinaryOp::Lte => "<=",
+        BinaryOp::Gt => ">",
+        BinaryOp::Gte => ">=",
+        BinaryOp::And => "&&",
+        BinaryOp::Or => "||",
+    }
 }
 
 pub(crate) fn collect_var_paths(expr: &Expr, out: &mut Vec<Vec<String>>) {

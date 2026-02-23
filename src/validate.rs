@@ -466,7 +466,17 @@ pub fn build_effective_constraints(
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for (hint_path, type_name) in hints {
-        let Some(type_local) = schema.type_constraints.get(type_name) else {
+        let type_local = schema.type_constraints.get(type_name).or_else(|| {
+            // Handle namespaced imports like "t.TimeRange" -> "TimeRange"
+            if let Some(dot_pos) = type_name.rfind('.') {
+                let base_name = &type_name[dot_pos + 1..];
+                schema.type_constraints.get(base_name)
+            } else {
+                None
+            }
+        });
+
+        let Some(type_local) = type_local else {
             continue;
         };
 
@@ -553,7 +563,17 @@ pub fn validate_constraints_with_imports(
                 named_scopes: std::collections::BTreeMap::new(),
             };
 
-            let result = evaluate(ast, &ctx).map_err(map_eval_error)?;
+            let result = evaluate(ast, &ctx).map_err(|eval_err| {
+                match eval_err {
+                    EvalError::Fatal(SyamlError::ExpressionError(msg)) => {
+                        SyamlError::ConstraintError(format!(
+                            "constraint evaluation failed at '{}': {} (in expression '{}')",
+                            normalized_path, msg, expression
+                        ))
+                    }
+                    other => map_eval_error(other),
+                }
+            })?;
             match result {
                 JsonValue::Bool(true) => {}
                 JsonValue::Bool(false) => {
