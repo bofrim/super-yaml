@@ -1,0 +1,79 @@
+---!syaml/v0
+
+---module
+name: money
+version: "1.0.0"
+description: "Financial types for amounts, currencies, and exchange rates"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---meta
+imports:
+  prim:
+    path: ../primitives/module.syaml
+    sections: [schema]
+
+---schema
+CurrencyCode:
+  - USD
+  - EUR
+  - GBP
+  - JPY
+  - CAD
+  - AUD
+  - CHF
+  - CNY
+  - HKD
+  - NZD
+  - SEK
+  - NOK
+  - DKK
+  - SGD
+  - MXN
+  - BRL
+  - INR
+  - RUB
+  - ZAR
+  - KRW
+  - TRY
+  - SAR
+  - AED
+  - THB
+  - IDR
+  - MYR
+  - PHP
+  - PLN
+  - CZK
+  - HUF
+
+MoneyAmount:
+  type: object
+  properties:
+    amount:
+      type: prim.NonNegativeNumber
+    currency: CurrencyCode
+
+PriceRange:
+  type: object
+  properties:
+    min_amount:
+      type: prim.NonNegativeNumber
+    max_amount:
+      type: prim.NonNegativeNumber
+    currency: CurrencyCode
+  constraints:
+    - "max_amount >= min_amount"
+
+ExchangeRate:
+  type: object
+  properties:
+    from_currency: CurrencyCode
+    to_currency: CurrencyCode
+    rate:
+      type: prim.PositiveNumber
+
+DiscountPercent:
+  type: number
+  minimum: 0
+  maximum: 100

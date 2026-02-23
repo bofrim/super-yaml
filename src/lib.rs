@@ -508,10 +508,13 @@ fn compile_parsed_document(
     let mut data = parsed.data.value.clone();
     let mut imported_data = HashMap::new();
 
-    if let Some(meta) = parsed.meta.as_ref() {
-        merge_imports(meta, base_dir, &mut schema.types, &mut imported_data, ctx)?;
-    }
-    validate_schema_type_references(&schema.types)?;
+    let excluded_hints = if let Some(meta) = parsed.meta.as_ref() {
+        merge_imports(meta, base_dir, &mut schema.types, &mut imported_data, ctx)?
+    } else {
+        HashMap::new()
+    };
+    validate_schema_type_references(&schema.types)
+        .map_err(|e| augment_with_section_hint(e, &excluded_hints))?;
 
     let strict_field_numbers = parsed
         .meta
@@ -540,10 +543,12 @@ fn compile_parsed_document(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    resolve_expressions_with_imports(&mut data, &env_values, &imports_for_eval)?;
+    resolve_expressions_with_imports(&mut data, &env_values, &imports_for_eval)
+        .map_err(|e| augment_with_section_hint(e, &excluded_hints))?;
     coerce_string_constructors_for_type_hints(&mut data, &parsed.data.type_hints, &schema.types)?;
 
-    validate_type_hints(&data, &parsed.data.type_hints, &schema)?;
+    validate_type_hints(&data, &parsed.data.type_hints, &schema)
+        .map_err(|e| augment_with_section_hint(e, &excluded_hints))?;
     let constraints = build_effective_constraints(&parsed.data.type_hints, &schema);
     validate_constraints_with_imports(&data, &env_values, &constraints, &imports_for_eval)?;
 
@@ -588,7 +593,9 @@ fn merge_imports(
     type_registry: &mut BTreeMap<String, JsonValue>,
     imported_data: &mut HashMap<String, JsonValue>,
     ctx: &mut CompileContext<'_>,
-) -> Result<(), SyamlError> {
+) -> Result<HashMap<String, String>, SyamlError> {
+    let mut excluded_hints: HashMap<String, String> = HashMap::new();
+
     for (alias, binding) in &meta.imports {
         let source =
             fetch::resolve_import_source(base_dir, &binding.path, &ctx.fetch_ctx)?;
@@ -646,10 +653,69 @@ fn merge_imports(
             fetch::update_lockfile_version(&source, imported_version, &mut ctx.fetch_ctx);
         }
 
-        imported_data.insert(alias.clone(), imported.value.clone());
-        insert_imported_types(type_registry, alias, &imported.exported_types)?;
+        if imports_section(&binding.sections, "schema") {
+            insert_imported_types(type_registry, alias, &imported.exported_types)?;
+        } else {
+            for type_name in imported.exported_types.keys() {
+                excluded_hints.insert(
+                    format!("{alias}.{type_name}"),
+                    format!(
+                        "type '{alias}.{type_name}' exists in the 'schema' section of \
+                         '{display_id}', but 'schema' is not included in the sections for \
+                         import '{alias}'; add 'schema' to sections to use this type"
+                    ),
+                );
+            }
+        }
+
+        if imports_section(&binding.sections, "data") {
+            imported_data.insert(alias.clone(), imported.value.clone());
+        } else {
+            excluded_hints.insert(
+                alias.clone(),
+                format!(
+                    "data from '{display_id}' is available via namespace '{alias}', but \
+                     'data' is not included in the sections for import '{alias}'; \
+                     add 'data' to sections to access it"
+                ),
+            );
+        }
     }
-    Ok(())
+
+    Ok(excluded_hints)
+}
+
+fn imports_section(sections: &Option<Vec<String>>, section: &str) -> bool {
+    match sections {
+        None => true,
+        Some(list) => list.iter().any(|s| s == section),
+    }
+}
+
+fn augment_with_section_hint(e: SyamlError, hints: &HashMap<String, String>) -> SyamlError {
+    if hints.is_empty() {
+        return e;
+    }
+    let msg = e.to_string();
+    // Check longer keys first to prefer more specific hints (e.g. alias.Type over alias).
+    let mut sorted: Vec<(&String, &String)> = hints.iter().collect();
+    sorted.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
+    for (key, hint) in sorted {
+        if msg.contains(key.as_str()) {
+            return match e {
+                SyamlError::SchemaError(m) => SyamlError::SchemaError(format!("{m}; {hint}")),
+                SyamlError::TypeHintError(m) => SyamlError::TypeHintError(format!("{m}; {hint}")),
+                SyamlError::FunctionalError(m) => {
+                    SyamlError::FunctionalError(format!("{m}; {hint}"))
+                }
+                SyamlError::ExpressionError(m) => {
+                    SyamlError::ExpressionError(format!("{m}; {hint}"))
+                }
+                other => other,
+            };
+        }
+    }
+    e
 }
 
 fn canonicalize_path(path: &Path) -> Result<PathBuf, SyamlError> {
@@ -891,8 +957,10 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
         )));
     }
 
-    let (path, hash, signature, version) = match value {
-        JsonValue::String(path) => (path.clone(), None, None, None),
+    const VALID_IMPORT_SECTIONS: &[&str] = &["schema", "data", "functional"];
+
+    let (path, hash, signature, version, sections) = match value {
+        JsonValue::String(path) => (path.clone(), None, None, None, None),
         JsonValue::Object(map) => {
             let path = map
                 .get("path")
@@ -947,7 +1015,38 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
-            (path, hash, signature, version)
+            let sections = if let Some(secs_val) = map.get("sections") {
+                let arr = secs_val.as_array().ok_or_else(|| {
+                    SyamlError::SchemaError(format!(
+                        "meta.imports.{}.sections must be a list of section names",
+                        alias
+                    ))
+                })?;
+                let mut names = Vec::new();
+                for item in arr {
+                    let name = item.as_str().ok_or_else(|| {
+                        SyamlError::SchemaError(format!(
+                            "meta.imports.{}.sections items must be strings",
+                            alias
+                        ))
+                    })?;
+                    if !VALID_IMPORT_SECTIONS.contains(&name) {
+                        return Err(SyamlError::SchemaError(format!(
+                            "meta.imports.{}.sections: unknown section '{}'; \
+                             valid sections are: {}",
+                            alias,
+                            name,
+                            VALID_IMPORT_SECTIONS.join(", ")
+                        )));
+                    }
+                    names.push(name.to_string());
+                }
+                Some(names)
+            } else {
+                None
+            };
+
+            (path, hash, signature, version, sections)
         }
         _ => {
             return Err(SyamlError::SchemaError(format!(
@@ -969,6 +1068,7 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
         hash,
         signature,
         version,
+        sections,
     })
 }
 

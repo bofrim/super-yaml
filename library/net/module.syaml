@@ -1,0 +1,64 @@
+---!syaml/v0
+
+---module
+name: net
+version: "1.0.0"
+description: "Networking types for ports, URLs, protocols, and addresses"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---schema
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+
+HttpMethod:
+  - GET
+  - POST
+  - PUT
+  - PATCH
+  - DELETE
+  - HEAD
+  - OPTIONS
+  - TRACE
+
+HttpStatusCode:
+  type: integer
+  minimum: 100
+  maximum: 599
+
+Hostname:
+  type: string
+  minLength: 1
+  maxLength: 253
+  pattern: '^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$'
+
+IPv4Address:
+  type: string
+  pattern: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
+
+IPv4Cidr:
+  type: string
+  pattern: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$'
+
+HttpUrl:
+  type: string
+  minLength: 11
+  pattern: '^http://.+'
+
+HttpsUrl:
+  type: string
+  minLength: 12
+  pattern: '^https://.+'
+
+MimeType:
+  type: string
+  pattern: '^[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_]*/[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]*$'
+
+Endpoint:
+  type: object
+  properties:
+    host: Hostname
+    port: Port

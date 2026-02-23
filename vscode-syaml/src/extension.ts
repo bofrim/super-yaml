@@ -532,6 +532,16 @@ interface ImportNamespace {
   importUri?: vscode.Uri;
   /** For `@module/file` imports: each segment mapped to its range and resolved URI. */
   modulePathSegments?: ModulePathSegment[];
+  /** Sections listed in `sections:` field; undefined means all sections are imported. */
+  sections?: string[];
+  /** Clickable ranges for each section name value in the `sections:` list. */
+  sectionItems?: ImportSectionItem[];
+}
+
+/** One clickable section name entry in an import's `sections:` list. */
+interface ImportSectionItem {
+  name: string;
+  range: vscode.Range;
 }
 
 /** One clickable segment of an `@module/file` import path. */
@@ -557,6 +567,13 @@ class SyamlTypeDefinitionProvider implements vscode.DefinitionProvider {
     );
     if (importPathDefinition) {
       return importPathDefinition;
+    }
+    const sectionDefinition = await findImportSectionReferenceAtPosition(
+      position,
+      importNamespaces
+    );
+    if (sectionDefinition) {
+      return sectionDefinition;
     }
     const namespaceDefinition = findImportNamespaceReferenceAtPosition(
       document,
@@ -1126,7 +1143,10 @@ async function buildSchemaTypeIndexWithImports(
       stackUris,
       cache
     );
-    mergeImportedSchemaTypeIndex(schemaIndex, importNamespace.alias, importedIndex);
+    // Only merge schema types if the import includes the schema section.
+    if (!importNamespace.sections || importNamespace.sections.includes("schema")) {
+      mergeImportedSchemaTypeIndex(schemaIndex, importNamespace.alias, importedIndex);
+    }
   }
 
   stackUris.delete(uriKey);
@@ -1719,6 +1739,60 @@ function findTypeOccurrenceAtPosition(
   position: vscode.Position
 ): TypeOccurrence | undefined {
   return occurrences.find((occurrence) => occurrence.range.contains(position));
+}
+
+/**
+ * Returns the line number of `---sectionName` in `document`, or undefined
+ * if that section header is not present.
+ */
+function findSectionHeaderLine(
+  document: vscode.TextDocument,
+  sectionName: string
+): number | undefined {
+  const marker = `---${sectionName}`;
+  for (let i = 0; i < document.lineCount; i += 1) {
+    if (document.lineAt(i).text.trim() === marker) {
+      return i;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * If the cursor sits on a section name inside an import's `sections:` list,
+ * navigates to that section's header (`---sectionName`) in the imported file.
+ */
+async function findImportSectionReferenceAtPosition(
+  position: vscode.Position,
+  importNamespaces: Map<string, ImportNamespace>
+): Promise<vscode.Location | undefined> {
+  for (const importNamespace of importNamespaces.values()) {
+    if (!importNamespace.sectionItems || !importNamespace.importUri) {
+      continue;
+    }
+    for (const item of importNamespace.sectionItems) {
+      if (!item.range.contains(position)) {
+        continue;
+      }
+      let importedDocument: vscode.TextDocument;
+      try {
+        importedDocument = await vscode.workspace.openTextDocument(
+          importNamespace.importUri
+        );
+      } catch {
+        return undefined;
+      }
+      const headerLine = findSectionHeaderLine(importedDocument, item.name);
+      if (headerLine === undefined) {
+        return undefined;
+      }
+      return new vscode.Location(
+        importNamespace.importUri,
+        new vscode.Position(headerLine, 0)
+      );
+    }
+  }
+  return undefined;
 }
 
 function findImportNamespaceReferenceAtPosition(
@@ -2961,12 +3035,21 @@ function collectImportNamespaces(document: vscode.TextDocument): Map<string, Imp
           )
         : undefined;
 
+    const parsedSections = parseImportSections(
+      document,
+      line,
+      indent,
+      metaBounds.endLine
+    );
+
     namespaces.set(alias, {
       alias,
       aliasRange,
       importPathRange: parsedImportPath?.range,
       importUri,
       modulePathSegments,
+      sections: parsedSections?.map((s) => s.name),
+      sectionItems: parsedSections,
     });
   }
 
@@ -3020,6 +3103,103 @@ function parseImportPathValue(
     return parseStringScalarAt(keyMatch[4], line, valueStart);
   }
 
+  return undefined;
+}
+
+/**
+ * Parses the `sections:` field of an import binding and returns each section
+ * name with its text range for cmd+click navigation to the section in the
+ * imported file.
+ *
+ * Supports both flow sequence form: `sections: [schema, data]`
+ * and block sequence form:
+ * ```
+ * sections:
+ *   - schema
+ *   - data
+ * ```
+ */
+function parseImportSections(
+  document: vscode.TextDocument,
+  aliasLine: number,
+  aliasIndent: number,
+  metaSectionEndLine: number
+): ImportSectionItem[] | undefined {
+  for (let line = aliasLine + 1; line < metaSectionEndLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):(.*)$/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    if (indent <= aliasIndent) {
+      break;
+    }
+
+    const key = keyMatch[2].trim();
+    if (key !== "sections") {
+      continue;
+    }
+
+    const inlineRaw = keyMatch[4];
+    const inlineTrimmed = inlineRaw.trim();
+
+    // Flow sequence: sections: [schema, data]
+    const flowMatch = /^\[([^\]]*)\]/.exec(inlineTrimmed);
+    if (flowMatch) {
+      const items: ImportSectionItem[] = [];
+      const bracketOffset =
+        keyMatch[0].length - keyMatch[4].length + inlineRaw.indexOf("[") + 1;
+      const contentStr = flowMatch[1];
+      const identRegex = /[a-z_][a-z0-9_]*/g;
+      let m: RegExpExecArray | null;
+      while ((m = identRegex.exec(contentStr)) !== null) {
+        const start = bracketOffset + m.index;
+        items.push({
+          name: m[0],
+          range: new vscode.Range(line, start, line, start + m[0].length),
+        });
+      }
+      return items;
+    }
+
+    if (inlineTrimmed.length > 0) {
+      // Some other inline value — not a sections list we understand.
+      continue;
+    }
+
+    // Block sequence:
+    // sections:
+    //   - schema
+    //   - data
+    const items: ImportSectionItem[] = [];
+    for (let seqLine = line + 1; seqLine < metaSectionEndLine; seqLine += 1) {
+      const seqCode = lineWithoutComment(document.lineAt(seqLine).text);
+      if (seqCode.trim().length === 0) {
+        continue;
+      }
+      const seqIndent = seqCode.length - seqCode.trimStart().length;
+      if (seqIndent <= indent) {
+        break;
+      }
+      const seqMatch = /^(\s*)-\s+([a-z_][a-z0-9_]*)\s*$/.exec(seqCode);
+      if (!seqMatch) {
+        break;
+      }
+      const itemValue = seqMatch[2];
+      const itemStart = seqMatch[1].length + 2; // skip "- "
+      items.push({
+        name: itemValue,
+        range: new vscode.Range(seqLine, itemStart, seqLine, itemStart + itemValue.length),
+      });
+    }
+    return items;
+  }
   return undefined;
 }
 

@@ -19,7 +19,7 @@ The CLI compiles `.syaml` into output artifacts:
 
 ```bash
 # Validate only (prints OK or error)
-super-yaml validate config.syaml
+super-yaml validate config.syamlm
 
 # Compile to JSON (default)
 super-yaml compile config.syaml --pretty
@@ -64,6 +64,7 @@ Every `.syaml` file has this structure:
 2. Sections are opened with `---meta`, `---schema`, `---data`, or `---functional`.
 3. All four sections are optional. They can appear in any order. Each section can appear at most once.
 4. When omitted, `schema` and `data` default to empty objects.
+5. `---module` is a special section only valid in files named `module.syaml`. See the [Modules](#modules) section.
 
 ### Minimal valid document
 
@@ -151,15 +152,95 @@ Loads external `.syaml` files under a namespace alias.
 ```yaml
 ---meta
 imports:
-  # Short form: alias -> path
+  # Short form: alias -> path (all sections imported)
   shared: ./shared_types.syaml
 
-  # Long form: alias -> object with path
+  # Long form: alias -> object with path (all sections imported)
   infra:
     path: ./infra/common.syaml
+
+  # Module import: @module_name resolves via project registry (syaml.syaml)
+  payments: "@payments"
+
+  # Module file import: @module_name/file resolves to a specific file in that module
+  inv: "@payments/invoice"
 ```
 
-Relative paths resolve from the importing file's directory. Cyclic imports are detected and rejected.
+Relative paths resolve from the importing file's directory. `@module` paths are resolved via the project registry. Cyclic imports are detected and rejected.
+
+#### Scoping imports with `sections`
+
+By default all sections of the imported file are available under the namespace alias. Use `sections` to restrict which sections are imported.
+
+Valid section names: `schema`, `data`, `functional`.
+
+```yaml
+---meta
+imports:
+  # Import only schema types — data is not available via this namespace
+  types_only:
+    path: ./shared.syaml
+    sections: [schema]
+
+  # Import only data — schema types are not available via this namespace
+  data_only:
+    path: ./shared.syaml
+    sections: [data]
+
+  # Import both explicitly
+  both:
+    path: ./shared.syaml
+    sections: [schema, data]
+```
+
+Block list form is also accepted:
+
+```yaml
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections:
+      - schema
+      - data
+```
+
+**Example — types-only import:**
+
+`shared.syaml`:
+
+```yaml
+---!syaml/v0
+---schema
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+---data
+default_port: 8080
+```
+
+`config.syaml`:
+
+```yaml
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [schema]   # only types; shared.default_port is not accessible
+---schema
+Server:
+  type: object
+  properties:
+    port:
+      type: shared.Port  # OK — schema was imported
+---data
+server <Server>:
+  port: 443
+```
+
+If you reference `shared.default_port` (data) or forget to include `schema` and reference `shared.Port`, the compiler emits a targeted error explaining which section to add.
 
 ---
 
@@ -334,13 +415,15 @@ Range <Base>:
 
 **Error cases**:
 
-| Condition | Error |
-|-----------|-------|
-| `<UnknownParent>` | `"type 'Child' extends unknown type 'UnknownParent'"` |
-| Parent is not `type: object` | `"type 'Child' extends 'Parent' which is not an object type"` |
-| Child is not `type: object` | `"only object types can use extends, but 'Child' is not an object type"` |
+
+| Condition                     | Error                                                                       |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| `<UnknownParent>`             | `"type 'Child' extends unknown type 'UnknownParent'"`                       |
+| Parent is not `type: object`  | `"type 'Child' extends 'Parent' which is not an object type"`               |
+| Child is not `type: object`   | `"only object types can use extends, but 'Child' is not an object type"`    |
 | Child redeclares parent field | `"type 'Child' cannot redeclare field 'field' already defined in 'Parent'"` |
-| Circular chain | `"circular type extension involving: A, B"` |
+| Circular chain                | `"circular type extension involving: A, B"`                                 |
+
 
 ### Array types
 
@@ -526,11 +609,13 @@ InventoryConfig:
 
 Schema types can declare a `mutability` policy that constrains how data values of that type may be updated over time. This is enforced by the functional section's permission model.
 
-| Value | Meaning |
-|---|---|
-| `frozen` | The value may never be changed after initial write. |
-| `monotone_increase` | The value may only increase (e.g. an ever-growing counter). |
-| `replace` | The value may be freely replaced. (Default when `mutability` is omitted.) |
+
+| Value               | Meaning                                                                   |
+| ------------------- | ------------------------------------------------------------------------- |
+| `frozen`            | The value may never be changed after initial write.                       |
+| `monotone_increase` | The value may only increase (e.g. an ever-growing counter).               |
+| `replace`           | The value may be freely replaced. (Default when `mutability` is omitted.) |
+
 
 ```yaml
 ---schema
@@ -565,12 +650,14 @@ The `^` suffix is stripped from the output key name — `high_score^` compiles t
 
 Properties in an object type can carry lifecycle annotations that describe when they were introduced, deprecated, or removed. The compiler checks these annotations against `meta.file.schema_version` and emits warnings or errors accordingly.
 
-| Annotation | Value | Meaning |
-|---|---|---|
-| `field_number` | positive integer | Stable protobuf-style field identity (must be unique when `strict_field_numbers: true`) |
-| `since` | semver string | Version when the field was introduced. Error if `schema_version` is older than `since`. |
-| `deprecated` | semver string or object | Version when the field was deprecated. A warning is emitted when a data value uses this field and `schema_version` >= the deprecated version. |
-| `removed` | semver string | Version when the field was removed. Error if `schema_version` >= `removed` and the data still contains the field. |
+
+| Annotation     | Value                   | Meaning                                                                                                                                       |
+| -------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `field_number` | positive integer        | Stable protobuf-style field identity (must be unique when `strict_field_numbers: true`)                                                       |
+| `since`        | semver string           | Version when the field was introduced. Error if `schema_version` is older than `since`.                                                       |
+| `deprecated`   | semver string or object | Version when the field was deprecated. A warning is emitted when a data value uses this field and `schema_version` >= the deprecated version. |
+| `removed`      | semver string           | Version when the field was removed. Error if `schema_version` >= `removed` and the data still contains the field.                             |
+
 
 The `deprecated` annotation accepts two forms:
 
@@ -703,17 +790,19 @@ Use `from_enum: TypeName` to validate a captured string against a named enum typ
 
 ### Complete schema keyword reference
 
-| Category   | Keywords |
-| ---------- | -------- |
-| Common     | `type`, `enum` |
-| Numeric    | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` |
-| String     | `minLength`, `maxLength`, `pattern` |
-| Object     | `properties`, `values`, `required`, `optional`, `constructors` |
-| Array      | `items`, `minItems`, `maxItems` |
-| Validation | `constraints` |
-| Union      | `tag`, `tag_required`, `options` (on `type: union`) |
+
+| Category   | Keywords                                                         |
+| ---------- | ---------------------------------------------------------------- |
+| Common     | `type`, `enum`                                                   |
+| Numeric    | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`     |
+| String     | `minLength`, `maxLength`, `pattern`                              |
+| Object     | `properties`, `values`, `required`, `optional`, `constructors`   |
+| Array      | `items`, `minItems`, `maxItems`                                  |
+| Validation | `constraints`                                                    |
+| Union      | `tag`, `tag_required`, `options` (on `type: union`)              |
 | Versioning | `field_number`, `since`, `deprecated`, `removed` (on properties) |
-| Mutability | `mutability` (`frozen`, `monotone_increase`, `replace`) |
+| Mutability | `mutability` (`frozen`, `monotone_increase`, `replace`)          |
+
 
 ---
 
@@ -1070,6 +1159,152 @@ imports:
 
 ---
 
+## Modules
+
+Modules are the unit of code organization in super_yaml. A directory becomes a module by placing a `module.syaml` manifest file inside it. The manifest declares the module's identity, enforces import rules, and provides shared metadata and imports that automatically apply to every `.syaml` file in the module.
+
+### Project registry (`syaml.syaml`)
+
+The project registry lives at the project root (the nearest ancestor directory that contains `syaml.syaml` or `.git`). It maps module names to directory paths using standard syaml syntax:
+
+```yaml
+---!syaml/v0
+---data
+modules:
+  payments: "services/payments/"
+  core: "shared/core/"
+  infra: "infra/"
+```
+
+When resolving `@payments`, the compiler finds the registry, reads `modules.payments`, and loads `services/payments/module.syaml`.
+
+### Module manifest (`module.syaml`)
+
+Any directory containing `module.syaml` is a module. The manifest uses a `---module` section to declare identity and policy:
+
+```yaml
+---!syaml/v0
+
+---module
+name: payments
+version: "1.0.0"
+description: "Payment processing schemas"
+
+# Merged into meta.file for every file in this module (file-level values win)
+metadata:
+  owner: platform-team
+  schema_version: "1.0.0"
+
+# Restricts what files in this module can import
+import_policy:
+  allow_network_imports: false   # Block URL-based imports
+  require_version: false         # Every import must specify version
+  require_hash: false            # Every import must specify a content hash
+  require_signature: false       # Every import must carry a signature
+  allowed_domains: []            # Non-empty = allowlist for network import hosts
+  blocked_modules: []            # Module names that cannot be imported
+
+---meta
+# These imports are injected into every file in the module
+# Files can shadow them with their own declarations
+imports:
+  core: "@core"
+
+---schema
+# Optional: shared types defined at the module level
+Currency: [USD, EUR, GBP]
+```
+
+**Rules for manifests:**
+
+- `---module` is only valid in a file named `module.syaml`. Using it in any other file is an error.
+- `---data` and `---functional` are not allowed in `module.syaml`.
+- `---schema` is allowed for module-level shared types.
+
+### `@module` import syntax
+
+Use `@module_name` or `@module_name/file` as an import path to reference modules by name rather than filesystem path:
+
+```yaml
+---meta
+imports:
+  # Import a whole module namespace (schema types and data from module.syaml)
+  payments: "@payments"
+
+  # Import a specific file within a module
+  inv: "@payments/invoice"
+  ref: "@payments/refund"
+```
+
+This lets you reorganize directories without updating every import that references the module — only the registry entry changes.
+
+### Module metadata inheritance
+
+When any `.syaml` file is compiled, the compiler walks up the directory tree to find a `module.syaml`. If found:
+
+1. The module `metadata` block is merged into the file's `meta.file`. **File-level values win** — the module only fills in keys the file doesn't declare.
+2. Module-level `---meta` imports are injected into the file's import namespace. **File-level imports shadow module imports** under the same alias.
+
+This means every file in a module automatically inherits the team ownership, schema version, and shared imports declared in the manifest without having to repeat them.
+
+### Import policy enforcement
+
+The `import_policy` block in a manifest is enforced for every import declared in any file that belongs to the module:
+
+| Policy key              | Default | Effect when enabled                                          |
+| ----------------------- | ------- | ------------------------------------------------------------ |
+| `allow_network_imports` | `true`  | When `false`, any `http://` or `https://` import is rejected |
+| `require_version`       | `false` | Every import must include a `version` constraint             |
+| `require_hash`          | `false` | Every import must include a `hash` field                     |
+| `require_signature`     | `false` | Every import must include a `signature` block                |
+| `allowed_domains`       | `[]`    | Non-empty: only listed domains are permitted for URLs        |
+| `blocked_modules`       | `[]`    | `@module` imports matching these names are rejected          |
+
+Policy violations are compile errors.
+
+### Using modules to organize code
+
+A typical module-based project layout:
+
+```text
+project/
+  syaml.syaml           ← project registry
+  services/
+    billing/
+      module.syaml      ← billing module manifest
+      service.syaml     ← billing service config
+      events.syaml      ← event types for billing
+    payments/
+      module.syaml      ← payments module manifest
+      invoice.syaml     ← invoice schemas and defaults
+      refund.syaml      ← refund schemas
+  shared/
+    core/
+      module.syaml      ← core module manifest
+      types.syaml       ← project-wide base types
+```
+
+Files in `services/billing/` automatically inherit:
+
+- `meta.file` metadata from `billing/module.syaml` (e.g. `owner: billing-team`)
+- Any module-level imports declared in `billing/module.syaml`
+
+Files in `services/payments/` inherit from their own module manifest independently.
+
+A file in `services/billing/service.syaml` can import the payments module with no path knowledge:
+
+```yaml
+---!syaml/v0
+---meta
+imports:
+  inv: "@payments/invoice"
+
+---data
+default_currency <string>: "=inv.default_currency"
+```
+
+---
+
 ## The `functional` Section
 
 The `functional` section declares named functions whose inputs, outputs, permissions, and behavioral contracts are all specified in the `.syaml` file. The compiler validates the contracts at compile time and generates typed stub code (Rust or TypeScript) from them.
@@ -1107,18 +1342,20 @@ FunctionName:
 
 ### Function fields
 
-| Field | Required | Description |
-|---|---|---|
-| `inputs` | no | Named input parameters with `type` and optional `mutable` flag. Inline object/array schemas generate named types in codegen. |
-| `output` | no | Return type declaration. |
-| `errors` | no | List of named error types the function may raise. |
-| `permissions.data.read` | no | JSONPath selectors for data fields the function is allowed to read. |
-| `permissions.data.write` | no | JSONPath selectors for data fields the function is allowed to write. |
-| `specification.description` | no | Free-form description. |
-| `specification.preconditions.strict` | no | Evaluatable boolean expressions checked before execution. Scope: `input.*`, `data.*`. |
-| `specification.preconditions.semantic` | no | Human-readable intent (not evaluated). |
-| `specification.postconditions.strict` | no | Evaluatable boolean expressions checked after execution. Scope: `input.*`, `data.*`, `output`. |
-| `specification.postconditions.semantic` | no | Human-readable intent (not evaluated). |
+
+| Field                                   | Required | Description                                                                                                                  |
+| --------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`                                | no       | Named input parameters with `type` and optional `mutable` flag. Inline object/array schemas generate named types in codegen. |
+| `output`                                | no       | Return type declaration.                                                                                                     |
+| `errors`                                | no       | List of named error types the function may raise.                                                                            |
+| `permissions.data.read`                 | no       | JSONPath selectors for data fields the function is allowed to read.                                                          |
+| `permissions.data.write`                | no       | JSONPath selectors for data fields the function is allowed to write.                                                         |
+| `specification.description`             | no       | Free-form description.                                                                                                       |
+| `specification.preconditions.strict`    | no       | Evaluatable boolean expressions checked before execution. Scope: `input.*`, `data.*`.                                        |
+| `specification.preconditions.semantic`  | no       | Human-readable intent (not evaluated).                                                                                       |
+| `specification.postconditions.strict`   | no       | Evaluatable boolean expressions checked after execution. Scope: `input.*`, `data.*`, `output`.                               |
+| `specification.postconditions.semantic` | no       | Human-readable intent (not evaluated).                                                                                       |
+
 
 ### Strict condition expressions
 
@@ -1629,6 +1866,105 @@ flex_booking <Booking>:
     REQUESTED_SEATS: 20
 ```
 
+### Example 7: Module-based project organization
+
+This example shows the `payments` module from the `examples/` directory. Three files work together — the registry, the module manifest, and a consuming file.
+
+**`examples/syaml.syaml`** (project registry):
+
+```yaml
+---!syaml/v0
+---data
+modules:
+  payments: "payments/"
+```
+
+**`examples/payments/module.syaml`** (module manifest):
+
+```yaml
+---!syaml/v0
+
+---module
+name: payments
+version: "1.0.0"
+description: "Payment processing schemas"
+metadata:
+  owner: platform-team
+  schema_version: "1.0.0"
+import_policy:
+  allow_network_imports: false
+
+---schema
+Currency: [USD, EUR, GBP]
+
+Money:
+  type: object
+  properties:
+    amount: number
+    currency: Currency
+  constraints:
+    - "amount >= 0"
+```
+
+**`examples/payments/invoice.syaml`** (module member — inherits manifest metadata automatically):
+
+```yaml
+---!syaml/v0
+
+---schema
+InvoiceStatus: [pending, paid, cancelled]
+
+Invoice:
+  type: object
+  properties:
+    id: string
+    status: InvoiceStatus
+    amount: number
+    currency: string
+
+---data
+default_currency <string>: "USD"
+tax_rate <number>: 0.08
+```
+
+**`examples/checkout.syaml`** (outside the module — uses `@payments/invoice`):
+
+```yaml
+---!syaml/v0
+
+---meta
+imports:
+  inv: "@payments/invoice"
+
+---schema
+CheckoutConfig:
+  type: object
+  properties:
+    currency: string
+    tax_rate: number
+    max_retries: integer
+
+---data
+checkout <CheckoutConfig>:
+  currency <string>: "=inv.default_currency"
+  tax_rate <number>: "=inv.tax_rate"
+  max_retries <integer>: 3
+```
+
+`checkout.syaml` compiles to:
+
+```json
+{
+  "checkout": {
+    "currency": "USD",
+    "max_retries": 3,
+    "tax_rate": 0.08
+  }
+}
+```
+
+Meanwhile, `payments/invoice.syaml` automatically carries `owner: platform-team` and `schema_version: "1.0.0"` in its `meta.file` without declaring them — inherited from `module.syaml`.
+
 ---
 
 ## Integrating super_yaml into a Codebase
@@ -1707,6 +2043,8 @@ env:                                       # Environment bindings
     default: fallback_value                # or required: true
 imports:                                   # Import other .syaml files
   alias: ./path/to/file.syaml
+  mod_alias: "@module_name"               # Module import (resolved via syaml.syaml registry)
+  file_alias: "@module_name/file"         # Specific file within a module
 
 ---schema
 TypeName:                                  # Named type definition
@@ -1813,4 +2151,20 @@ FunctionName:                              # Function declaration
     postconditions:
       strict: ["output >= input.param"]
       semantic: ["result is at least input"]
+
+# module.syaml only — declare module identity, policy, and shared imports
+---module
+name: module_name                          # Required
+version: "1.0.0"                           # Optional semver
+description: "Human-readable description"  # Optional
+metadata:                                  # Merged into meta.file for all member files
+  owner: team-name
+  schema_version: "1.0.0"
+import_policy:                             # Applied to all imports in member files
+  allow_network_imports: false             # default: true
+  require_version: false                   # default: false
+  require_hash: false                      # default: false
+  require_signature: false                 # default: false
+  allowed_domains: []                      # default: [] (unrestricted)
+  blocked_modules: []                      # default: [] (none blocked)
 ```

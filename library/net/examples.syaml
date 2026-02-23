@@ -1,0 +1,20 @@
+---!syaml/v0
+---meta
+imports:
+  n:
+    path: ./module.syaml
+    sections: [schema]
+---data
+_examples:
+  port <n.Port>: 8080
+  method <n.HttpMethod>: GET
+  status <n.HttpStatusCode>: 200
+  hostname <n.Hostname>: api.example.com
+  ipv4 <n.IPv4Address>: 192.168.1.1
+  cidr <n.IPv4Cidr>: 10.0.0.0/24
+  http_url <n.HttpUrl>: http://internal.example.com/health
+  https_url <n.HttpsUrl>: https://api.example.com/v1
+  mime <n.MimeType>: application/json
+  endpoint <n.Endpoint>:
+    host: api.example.com
+    port: 443

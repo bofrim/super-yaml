@@ -1,0 +1,24 @@
+---!syaml/v0
+---meta
+imports:
+  # Import only the schema section from the shared file.
+  # shared.Port and shared.ServiceDefaults are available as types,
+  # but shared.defaults (data) is not accessible in this document.
+  shared:
+    path: ./imported_types_shared.syaml
+    sections: [schema]
+---schema
+Endpoint:
+  type: object
+  properties:
+    host:
+      type: string
+    port:
+      type: shared.Port    # shared.Port comes from the imported schema section
+---data
+primary <Endpoint>:
+  host: primary.internal
+  port: 443
+replica <Endpoint>:
+  host: replica.internal
+  port: 8443

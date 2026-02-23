@@ -207,6 +207,7 @@ fn parse_manifest_import_binding(
             hash: None,
             signature: None,
             version: None,
+            sections: None,
         }),
         JsonValue::Object(map) => {
             let path = map
@@ -228,6 +229,7 @@ fn parse_manifest_import_binding(
                 hash,
                 signature: None,
                 version,
+                sections: None,
             })
         }
         _ => Err(SyamlError::ModuleManifestError(format!(
@@ -544,6 +546,7 @@ mod tests {
             hash: None,
             signature: None,
             version: None,
+            sections: None,
         }
     }
 
@@ -553,6 +556,7 @@ mod tests {
             hash: None,
             signature: None,
             version: Some("^1.0".to_string()),
+            sections: None,
         }
     }
 

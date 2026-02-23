@@ -1,0 +1,11 @@
+---!syaml/v0
+
+---data
+modules:
+  primitives: "primitives/"
+  time: "time/"
+  money: "money/"
+  net: "net/"
+  geo: "geo/"
+  pagination: "pagination/"
+  errors: "errors/"

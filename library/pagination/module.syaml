@@ -1,0 +1,67 @@
+---!syaml/v0
+
+---module
+name: pagination
+version: "1.0.0"
+description: "Pagination patterns for cursor-based and offset-based APIs"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---schema
+PageSize:
+  type: integer
+  minimum: 1
+  maximum: 1000
+
+PageNumber:
+  type: integer
+  minimum: 1
+
+SortOrder:
+  - asc
+  - desc
+
+PageRequest:
+  type: object
+  properties:
+    page: PageNumber
+    page_size: PageSize
+    sort_order:
+      type: SortOrder
+      optional: true
+
+CursorRequest:
+  type: object
+  properties:
+    cursor:
+      type: string
+      optional: true
+    page_size: PageSize
+    sort_order:
+      type: SortOrder
+      optional: true
+
+PageMeta:
+  type: object
+  properties:
+    page: PageNumber
+    page_size: PageSize
+    total_items:
+      type: integer
+      minimum: 0
+    total_pages:
+      type: integer
+      minimum: 1
+
+CursorMeta:
+  type: object
+  properties:
+    next_cursor:
+      type: string
+      optional: true
+    prev_cursor:
+      type: string
+      optional: true
+    page_size: PageSize
+    has_more: boolean

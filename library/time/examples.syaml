@@ -1,0 +1,20 @@
+---!syaml/v0
+---meta
+imports:
+  t:
+    path: ./module.syaml
+    sections: [schema]
+---data
+_examples:
+  ts <t.UnixTimestamp>: 1708704000
+  ms <t.UnixMillis>: 1708704000000
+  date <t.IsoDate>: 2024-02-23
+  datetime <t.IsoDateTime>: 2024-02-23T12:00:00Z
+  datetime_tz <t.IsoDateTime>: 2024-02-23T12:00:00+05:30
+  dur_sec <t.DurationSeconds>: 3600
+  dur_ms <t.DurationMillis>: 86400000
+  dow <t.DayOfWeek>: monday
+  month <t.Month>: february
+  range <t.TimeRange>:
+    start: 1708704000
+    end: 1708790400

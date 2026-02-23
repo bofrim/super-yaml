@@ -1,0 +1,21 @@
+---!syaml/v0
+---meta
+imports:
+  prim:
+    path: ./module.syaml
+    sections: [schema]
+---data
+_examples:
+  uuid <prim.Uuid>: 550e8400-e29b-41d4-a716-446655440000
+  email <prim.Email>: user@example.com
+  url <prim.Url>: https://example.com/path
+  semver <prim.Semver>: 1.2.3
+  semver_pre <prim.Semver>: 2.0.0-alpha.1
+  slug <prim.Slug>: my-feature-flag
+  sha256 <prim.Sha256Hex>: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  count <prim.NonNegativeInteger>: 0
+  pos_int <prim.PositiveInteger>: 42
+  non_neg_num <prim.NonNegativeNumber>: 3.14
+  pos_num <prim.PositiveNumber>: 0.001
+  pct <prim.Percentage>: 87.5
+  prob <prim.Probability>: 0.95

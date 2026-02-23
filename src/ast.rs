@@ -92,6 +92,11 @@ pub struct ImportBinding {
     /// Optional semver version requirement (e.g. `^1.2.0`).
     #[serde(default)]
     pub version: Option<String>,
+    /// Sections to import from the document. `None` (or omitted) means all sections.
+    /// Valid names: `"schema"`, `"data"`, `"functional"`.
+    /// Example: `sections: [schema]` imports only schema types; data is not available.
+    #[serde(default)]
+    pub sections: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

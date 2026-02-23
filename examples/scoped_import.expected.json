@@ -1,0 +1,10 @@
+{
+  "primary": {
+    "host": "primary.internal",
+    "port": 443
+  },
+  "replica": {
+    "host": "replica.internal",
+    "port": 8443
+  }
+}

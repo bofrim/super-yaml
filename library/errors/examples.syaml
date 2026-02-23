@@ -1,0 +1,28 @@
+---!syaml/v0
+---meta
+imports:
+  e:
+    path: ./module.syaml
+    sections: [schema]
+---data
+_examples:
+  severity <e.ErrorSeverity>: error
+  code <e.ErrorCode>: NOT_FOUND
+  detail <e.ErrorDetail>:
+    code: VALIDATION_FAILED
+    message: Input validation failed
+    field: email
+    severity: warning
+  val_err <e.ValidationError>:
+    code: REQUIRED_FIELD
+    message: This field is required
+    field: username
+  val_errs <e.ValidationErrors>:
+    - {code: REQUIRED_FIELD, message: This field is required, field: email}
+    - {code: INVALID_FORMAT, message: Must be a valid email address, field: email}
+  op_status <e.OperationStatus>: pending
+  api_err <e.ApiError>:
+    status_code: 404
+    error_code: NOT_FOUND
+    message: The requested resource was not found
+    request_id: req-abc-123

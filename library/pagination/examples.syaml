@@ -1,0 +1,26 @@
+---!syaml/v0
+---meta
+imports:
+  p:
+    path: ./module.syaml
+    sections: [schema]
+---data
+_examples:
+  page_size <p.PageSize>: 20
+  page_num <p.PageNumber>: 1
+  sort <p.SortOrder>: asc
+  page_req <p.PageRequest>:
+    page: 1
+    page_size: 20
+    sort_order: desc
+  cursor_req <p.CursorRequest>:
+    page_size: 50
+  page_meta <p.PageMeta>:
+    page: 3
+    page_size: 20
+    total_items: 243
+    total_pages: 13
+  cursor_meta <p.CursorMeta>:
+    next_cursor: eyJpZCI6MTAwfQ
+    page_size: 20
+    has_more: true

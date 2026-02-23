@@ -1220,3 +1220,307 @@ v: "${{shared.val}}"
     let compiled = compile(&dir.file_path("root.syaml"));
     assert_eq!(compiled["v"], json!(777));
 }
+
+// ---------------------------------------------------------------------------
+// Section-scoped imports
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sections_schema_only_imports_types_but_not_data() {
+    let dir = TempDir::new("sections_schema_only");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+Port:
+  type: integer
+  minimum: 1
+  maximum: 65535
+---data
+default_port: 9000
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [schema]
+---schema
+Config:
+  type: object
+  properties:
+    port:
+      type: shared.Port
+---data
+cfg <Config>:
+  port: 3000
+"#,
+    );
+
+    // Schema type shared.Port is available; data compiles without accessing shared data.
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["cfg"]["port"], json!(3000));
+}
+
+#[test]
+fn sections_data_only_imports_data_but_not_types() {
+    let dir = TempDir::new("sections_data_only");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+Port:
+  type: integer
+---data
+default_port: 9000
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [data]
+---schema
+{}
+---data
+port: "=shared.default_port"
+"#,
+    );
+
+    // Data expression references shared.default_port; type shared.Port is NOT available.
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["port"], json!(9000));
+}
+
+#[test]
+fn sections_schema_and_data_imports_both() {
+    let dir = TempDir::new("sections_both");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+Tag:
+  type: string
+---data
+default_tag: latest
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [schema, data]
+---schema
+Image:
+  type: object
+  properties:
+    tag:
+      type: shared.Tag
+---data
+img <Image>:
+  tag: "=shared.default_tag"
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled["img"]["tag"], json!("latest"));
+}
+
+#[test]
+fn sections_block_list_form_works() {
+    let dir = TempDir::new("sections_block_list");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+Limit:
+  type: integer
+---data
+{}
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections:
+      - schema
+---schema
+Req:
+  type: object
+  properties:
+    limit:
+      type: shared.Limit
+---data
+{}
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled, json!({}));
+}
+
+#[test]
+fn sections_unknown_section_name_errors() {
+    let dir = TempDir::new("sections_unknown");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+{}
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [schema, typos]
+---schema
+{}
+---data
+{}
+"#,
+    );
+
+    let err = compile_document_from_path(&dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("unknown section 'typos'"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.contains("valid sections are"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn sections_excluded_schema_type_hint_in_error() {
+    let dir = TempDir::new("sections_hint");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+Port:
+  type: integer
+---data
+{}
+"#,
+    );
+
+    // Import with sections:[data] — schema is excluded.
+    // Attempting to reference shared.Port in schema should give a helpful hint.
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [data]
+---schema
+Config:
+  type: object
+  properties:
+    port:
+      type: shared.Port
+---data
+{}
+"#,
+    );
+
+    let err = compile_document_from_path(&dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("shared.Port"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.contains("add 'schema' to sections"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn sections_excluded_data_hint_in_expression_error() {
+    let dir = TempDir::new("sections_data_hint");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---schema
+{}
+---data
+default_port: 8080
+"#,
+    );
+
+    // Import with sections:[schema] — data is excluded.
+    // Attempting to use =shared.default_port expression should give a helpful hint.
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [schema]
+---schema
+{}
+---data
+port: "=shared.default_port"
+"#,
+    );
+
+    let err = compile_document_from_path(&dir.file_path("root.syaml"), &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("add 'data' to sections"),
+        "unexpected error: {err}"
+    );
+}

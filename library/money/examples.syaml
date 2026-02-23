@@ -1,0 +1,21 @@
+---!syaml/v0
+---meta
+imports:
+  m:
+    path: ./module.syaml
+    sections: [schema]
+---data
+_examples:
+  currency <m.CurrencyCode>: USD
+  price <m.MoneyAmount>:
+    amount: 9.99
+    currency: USD
+  price_range <m.PriceRange>:
+    min_amount: 9.99
+    max_amount: 99.99
+    currency: EUR
+  rate <m.ExchangeRate>:
+    from_currency: USD
+    to_currency: EUR
+    rate: 0.92
+  discount <m.DiscountPercent>: 15.0

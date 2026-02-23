@@ -1,0 +1,86 @@
+---!syaml/v0
+
+---module
+name: errors
+version: "1.0.0"
+description: "Error and operation status types for API responses"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---schema
+ErrorSeverity:
+  - debug
+  - info
+  - warning
+  - error
+  - critical
+  - fatal
+
+ErrorCode:
+  type: string
+  minLength: 1
+  maxLength: 64
+  pattern: '^[A-Z][A-Z0-9_]*$'
+
+ErrorDetail:
+  type: object
+  properties:
+    code: ErrorCode
+    message:
+      type: string
+      minLength: 1
+    field:
+      type: string
+      optional: true
+    severity:
+      type: ErrorSeverity
+      optional: true
+
+ValidationError:
+  type: object
+  properties:
+    code: ErrorCode
+    message:
+      type: string
+      minLength: 1
+    field:
+      type: string
+      minLength: 1
+    severity:
+      type: ErrorSeverity
+      optional: true
+
+ValidationErrors:
+  type: array
+  items:
+    type: ValidationError
+  minItems: 1
+
+OperationStatus:
+  - pending
+  - running
+  - succeeded
+  - failed
+  - cancelled
+  - timeout
+
+ApiError:
+  type: object
+  properties:
+    status_code:
+      type: integer
+      minimum: 400
+      maximum: 599
+    error_code: ErrorCode
+    message:
+      type: string
+      minLength: 1
+    details:
+      type: array
+      items:
+        type: ErrorDetail
+      optional: true
+    request_id:
+      type: string
+      optional: true

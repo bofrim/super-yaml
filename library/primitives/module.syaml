@@ -1,0 +1,76 @@
+---!syaml/v0
+
+---module
+name: primitives
+version: "1.0.0"
+description: "Validated scalar types for common use"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---schema
+NonEmptyString:
+  type: string
+  minLength: 1
+
+Uuid:
+  type: string
+  pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+Email:
+  type: string
+  minLength: 5
+  maxLength: 254
+  pattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+
+Url:
+  type: string
+  minLength: 7
+  maxLength: 2083
+  pattern: '^https?://.+'
+
+Semver:
+  type: string
+  pattern: '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+
+Slug:
+  type: string
+  minLength: 1
+  maxLength: 100
+  pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+
+Base64:
+  type: string
+  pattern: '^[A-Za-z0-9+/]*={0,2}$'
+
+Sha256Hex:
+  type: string
+  minLength: 64
+  maxLength: 64
+  pattern: '^[0-9a-f]{64}$'
+
+NonNegativeInteger:
+  type: integer
+  minimum: 0
+
+PositiveInteger:
+  type: integer
+  minimum: 1
+
+NonNegativeNumber:
+  type: number
+  minimum: 0
+
+PositiveNumber:
+  type: number
+  exclusiveMinimum: 0
+
+Percentage:
+  type: number
+  minimum: 0
+  maximum: 100
+
+Probability:
+  type: number
+  minimum: 0
+  maximum: 1

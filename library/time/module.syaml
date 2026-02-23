@@ -1,0 +1,65 @@
+---!syaml/v0
+
+---module
+name: time
+version: "1.0.0"
+description: "Temporal types for timestamps, durations, and calendar values"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---schema
+UnixTimestamp:
+  type: integer
+  minimum: 0
+
+UnixMillis:
+  type: integer
+  minimum: 0
+
+IsoDate:
+  type: string
+  pattern: '^\d{4}-\d{2}-\d{2}$'
+
+IsoDateTime:
+  type: string
+  pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+
+DurationSeconds:
+  type: integer
+  minimum: 0
+
+DurationMillis:
+  type: integer
+  minimum: 0
+
+DayOfWeek:
+  - monday
+  - tuesday
+  - wednesday
+  - thursday
+  - friday
+  - saturday
+  - sunday
+
+Month:
+  - january
+  - february
+  - march
+  - april
+  - may
+  - june
+  - july
+  - august
+  - september
+  - october
+  - november
+  - december
+
+TimeRange:
+  type: object
+  properties:
+    start: UnixTimestamp
+    end: UnixTimestamp
+  constraints:
+    - "end >= start"

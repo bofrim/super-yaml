@@ -1,0 +1,23 @@
+---!syaml/v0
+---meta
+imports:
+  g:
+    path: ./module.syaml
+    sections: [schema]
+---data
+_examples:
+  lat <g.Latitude>: 37.7749
+  lng <g.Longitude>: -122.4194
+  coords <g.Coordinates>:
+    lat: 37.7749
+    lng: -122.4194
+  country <g.CountryCode>: US
+  lang <g.LanguageCode>: en
+  address <g.PostalAddress>:
+    street: "123 Main St"
+    city: Springfield
+    state: IL
+    postal_code: "62701"
+    country: US
+  tz <g.Timezone>: America/New_York
+  tz_utc <g.Timezone>: UTC
