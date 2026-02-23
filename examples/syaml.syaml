@@ -1,0 +1,5 @@
+---!syaml/v0
+
+---data
+modules:
+  payments: "payments/"

@@ -111,6 +111,9 @@ pub struct SchemaDoc {
     /// Type-local constraints keyed by type name, then by type-relative JSON path.
     #[serde(default)]
     pub type_constraints: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// Maps child type name → parent type name for types declared with extends syntax.
+    #[serde(default)]
+    pub extends: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,4 +221,66 @@ pub struct FunctionDef {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FunctionalDoc {
     pub functions: BTreeMap<String, FunctionDef>,
+}
+
+/// Import policy from a module manifest restricting what module members can import.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportPolicy {
+    /// Whether URL-based imports are allowed. Default: `true`.
+    #[serde(default = "default_true")]
+    pub allow_network_imports: bool,
+    /// Whether every import must specify a `version`. Default: `false`.
+    #[serde(default)]
+    pub require_version: bool,
+    /// Whether every import must specify a `hash`. Default: `false`.
+    #[serde(default)]
+    pub require_hash: bool,
+    /// Whether every import must specify a `signature`. Default: `false`.
+    #[serde(default)]
+    pub require_signature: bool,
+    /// If non-empty, only these domains are allowed for URL imports.
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
+    /// Module names that cannot be imported by files in this module.
+    #[serde(default)]
+    pub blocked_modules: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ImportPolicy {
+    fn default() -> Self {
+        Self {
+            allow_network_imports: true,
+            require_version: false,
+            require_hash: false,
+            require_signature: false,
+            allowed_domains: Vec::new(),
+            blocked_modules: Vec::new(),
+        }
+    }
+}
+
+/// Parsed `module.syaml` manifest that defines a module.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleManifest {
+    /// Module name (must match the registry entry in `syaml.toml`).
+    pub name: String,
+    /// Optional semver version string.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Optional human-readable description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Key-value metadata merged into `meta.file` for all module members (file-level wins).
+    #[serde(default)]
+    pub metadata: BTreeMap<String, JsonValue>,
+    /// Import restrictions applied to all member files.
+    #[serde(default)]
+    pub import_policy: ImportPolicy,
+    /// Imports injected into all module member files (file-level can shadow).
+    #[serde(default)]
+    pub imports: BTreeMap<String, ImportBinding>,
 }

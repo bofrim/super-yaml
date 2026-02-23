@@ -1,0 +1,25 @@
+---!syaml/v0
+
+---schema
+InvoiceStatus:
+  type: string
+  enum:
+    - pending
+    - paid
+    - cancelled
+
+Invoice:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+    amount:
+      type: number
+    currency:
+      type: string
+
+---data
+default_currency <string>: "USD"
+tax_rate <number>: 0.08

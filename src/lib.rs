@@ -57,6 +57,8 @@ pub mod validate;
 pub mod verify;
 /// JSON-to-YAML renderer used by compiled YAML output.
 pub mod yaml_writer;
+/// Module manifest parsing, discovery, and import policy enforcement.
+pub mod module;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -65,7 +67,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 
 use ast::{
-    CompiledDocument, DataDoc, EnvBinding, ImportBinding, Meta, ParsedDocument, SignatureBinding,
+    CompiledDocument, DataDoc, EnvBinding, ImportBinding, Meta, ModuleManifest, ParsedDocument,
+    SignatureBinding,
 };
 use coerce::coerce_string_constructors_for_type_hints;
 pub use error::SyamlError;
@@ -123,6 +126,13 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
             }
             "functional" => {
                 functional = Some(functional::parse_functional(&section_value)?);
+            }
+            "module" => {
+                // Module sections are only valid in module.syaml; handled by module::parse_module_manifest.
+                // Reject them in regular document parsing.
+                return Err(SyamlError::SectionError(
+                    "'---module' section is only allowed in module.syaml manifest files".to_string(),
+                ));
             }
             _ => unreachable!("validated by section scanner"),
         }
@@ -323,13 +333,170 @@ fn compile_document_from_content(
             canonical_path.display()
         ))
     })?;
-    let compiled = compile_document_internal(input, base_dir, ctx);
+
+    let is_manifest = canonical_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n == module::MANIFEST_FILENAME)
+        .unwrap_or(false);
+
+    let compiled = if is_manifest {
+        // Compile a module manifest: validate structure, export schema types if present.
+        compile_module_manifest(input, base_dir, ctx)
+    } else {
+        // Regular document: parse, apply module context, then compile.
+        compile_document_with_module_context(input, canonical_path, base_dir, ctx)
+    };
+
     ctx.import_stack.pop();
 
     let compiled = compiled?;
     ctx.import_cache
         .insert(canonical_path.to_path_buf(), compiled.clone());
     Ok(compiled)
+}
+
+/// Compiles a `module.syaml` manifest: validates structure, returns schema types but empty data.
+fn compile_module_manifest(
+    input: &str,
+    base_dir: &Path,
+    ctx: &mut CompileContext<'_>,
+) -> Result<CompiledWithTypes, SyamlError> {
+    let manifest = module::parse_module_manifest(input)?;
+
+    // Parse schema section if present (for shared types)
+    let (_, sections) = section_scanner::scan_sections(input)?;
+    let schema_sec = sections.iter().find(|s| s.name == "schema");
+
+    let mut exported_types = BTreeMap::new();
+    if let Some(sec) = schema_sec {
+        let schema_val = parse_section_value("schema", &sec.body)?;
+        let schema_doc = parse_schema(&schema_val)?;
+        // Resolve imports declared in the manifest's meta (for schema cross-refs)
+        if !manifest.imports.is_empty() {
+            let manifest_meta = Meta {
+                file: BTreeMap::new(),
+                env: BTreeMap::new(),
+                imports: manifest.imports.clone(),
+            };
+            let mut dummy_types = schema_doc.types.clone();
+            let mut dummy_data = HashMap::new();
+            merge_imports(&manifest_meta, base_dir, &mut dummy_types, &mut dummy_data, ctx)?;
+            exported_types = dummy_types;
+        } else {
+            exported_types = schema_doc.types;
+        }
+    }
+
+    Ok(CompiledWithTypes {
+        value: JsonValue::Object(serde_json::Map::new()),
+        exported_types,
+        warnings: Vec::new(),
+    })
+}
+
+/// Parses a regular (non-manifest) document, applies module context, then compiles it.
+fn compile_document_with_module_context(
+    input: &str,
+    canonical_path: &Path,
+    base_dir: &Path,
+    ctx: &mut CompileContext<'_>,
+) -> Result<CompiledWithTypes, SyamlError> {
+    let mut parsed = parse_document(input)?;
+
+    // Step 1: find module manifest (if any) and enforce policy on file's own imports
+    let manifest_result = find_and_load_module_manifest(canonical_path)?;
+
+    if let Some((ref manifest, ref manifest_path)) = manifest_result {
+        // Enforce policy on the file's declared imports BEFORE injecting module imports
+        if let Some(ref meta) = parsed.meta {
+            module::enforce_import_policy(
+                &meta.imports,
+                &manifest.import_policy,
+                &canonical_path.display().to_string(),
+            )?;
+        }
+        // Inject module metadata and imports, but skip any that would import this file itself.
+        let manifest_dir = manifest_path.parent().unwrap_or(Path::new("."));
+        let filtered_manifest =
+            filter_self_referential_imports(manifest, manifest_dir, canonical_path);
+        module::apply_module_to_meta(&mut parsed.meta, &filtered_manifest);
+    }
+
+    // Step 2: resolve @module import paths to real filesystem paths
+    resolve_module_imports_in_meta(&mut parsed.meta, canonical_path)?;
+
+    compile_parsed_document(parsed, base_dir, ctx)
+}
+
+/// Returns a copy of `manifest` with any imports that resolve to `self_path` removed.
+/// This prevents module-injected imports from creating self-import cycles.
+fn filter_self_referential_imports(
+    manifest: &ModuleManifest,
+    manifest_dir: &Path,
+    self_path: &Path,
+) -> ModuleManifest {
+    let mut filtered = manifest.clone();
+    filtered.imports.retain(|_alias, binding| {
+        if binding.path.starts_with('@') || is_url(&binding.path) {
+            return true; // can't cheaply resolve these here; keep them
+        }
+        let resolved = manifest_dir.join(&binding.path);
+        // Canonicalize for comparison if possible
+        let resolved_canonical = fs::canonicalize(&resolved).unwrap_or(resolved);
+        resolved_canonical != self_path
+    });
+    filtered
+}
+
+fn is_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://")
+}
+
+/// Walks up from `file_path` to find and parse the nearest `module.syaml`.
+/// Returns `(manifest, manifest_path)` or `None`.
+fn find_and_load_module_manifest(
+    file_path: &Path,
+) -> Result<Option<(ModuleManifest, PathBuf)>, SyamlError> {
+    let Some(manifest_path) = module::find_module_manifest(file_path) else {
+        return Ok(None);
+    };
+    let content = fs::read_to_string(&manifest_path).map_err(|e| {
+        SyamlError::ModuleManifestError(format!(
+            "failed to read module manifest '{}': {e}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest = module::parse_module_manifest(&content)?;
+    Ok(Some((manifest, manifest_path)))
+}
+
+/// Resolves any `@module` or `@module/file` import paths in meta to real filesystem paths.
+fn resolve_module_imports_in_meta(
+    meta: &mut Option<Meta>,
+    file_path: &Path,
+) -> Result<(), SyamlError> {
+    let Some(ref mut meta) = meta else {
+        return Ok(());
+    };
+
+    let has_module_imports = meta.imports.values().any(|b| b.path.starts_with('@'));
+    if !has_module_imports {
+        return Ok(());
+    }
+
+    let start = file_path.parent().unwrap_or(file_path);
+    let project_root = module::find_project_root(start).ok_or(SyamlError::NoProjectRegistry)?;
+    let registry = module::load_module_registry(&project_root)?;
+
+    for binding in meta.imports.values_mut() {
+        if binding.path.starts_with('@') {
+            let resolved = module::resolve_module_import(&binding.path, &registry)?;
+            binding.path = resolved.display().to_string();
+        }
+    }
+
+    Ok(())
 }
 
 fn compile_parsed_document(

@@ -65,4 +65,16 @@ pub enum SyamlError {
     /// Filesystem I/O error from CLI or callers that propagate I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Malformed or invalid `module.syaml` manifest.
+    #[error("module manifest error: {0}")]
+    ModuleManifestError(String),
+    /// Import rejected by the enclosing module's `import_policy`.
+    #[error("import policy violation in '{file}': {reason}")]
+    ImportPolicyViolation { file: String, reason: String },
+    /// `@module_name` used but the module is not registered in `syaml.toml`.
+    #[error("module not found: '{0}'")]
+    ModuleNotFound(String),
+    /// `@module_name` import attempted but no `syaml.toml` registry was found.
+    #[error("no project registry: syaml.syaml not found; required for @module imports")]
+    NoProjectRegistry,
 }

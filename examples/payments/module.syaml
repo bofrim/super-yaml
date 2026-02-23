@@ -1,0 +1,25 @@
+---!syaml/v0
+
+---module
+name: payments
+version: "1.0.0"
+description: "Payment processing schemas"
+metadata:
+  owner: platform-team
+  schema_version: "1.0.0"
+
+---schema
+Currency:
+  type: string
+  enum:
+    - USD
+    - EUR
+    - GBP
+
+Money:
+  type: object
+  properties:
+    amount:
+      type: number
+    currency:
+      type: string

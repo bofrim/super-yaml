@@ -1,0 +1,14 @@
+---!syaml/v0
+
+---schema
+RefundReason:
+  type: string
+  enum:
+    - duplicate
+    - fraudulent
+    - requested_by_customer
+
+---data
+refund_id <string>: "REF-001"
+reason <RefundReason>: "duplicate"
+original_invoice <string>: "INV-001"

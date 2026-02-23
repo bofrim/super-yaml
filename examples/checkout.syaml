@@ -1,0 +1,22 @@
+---!syaml/v0
+
+---meta
+imports:
+  inv: "@payments/invoice"
+
+---schema
+CheckoutConfig:
+  type: object
+  properties:
+    currency:
+      type: string
+    tax_rate:
+      type: number
+    max_retries:
+      type: integer
+
+---data
+checkout <CheckoutConfig>:
+  currency <string>: "=inv.default_currency"
+  tax_rate <number>: "=inv.tax_rate"
+  max_retries <integer>: 3
