@@ -1,0 +1,120 @@
+---!syaml/v0
+
+---meta
+imports:
+  f:
+    path: ./module.syaml
+    sections: [schema]
+---data
+# File upload examples
+uploading_file <f.FileUpload>:
+  file:
+    name: "readme.txt"
+    extension: txt
+    size <f.FileSize>: 1024bytes
+    mime_type: "text/plain"
+    created_at: "2024-01-15T10:30:00Z"
+    modified_at: "2024-01-15T10:30:00Z"
+    checksum: "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"
+  state: uploading
+  progress:
+    current: 512
+    total: 1024
+    percentage: 50
+  upload_url: "https://api.example.com/upload/123"
+
+completed_upload <f.FileUpload>:
+  file:
+    name: "photo.jpg"
+    extension: jpg
+    size <f.FileSize>: 2.5mb
+    mime_type: "image/jpeg"
+    created_at: "2024-01-15T14:20:00Z"
+    modified_at: "2024-01-15T14:20:00Z"
+    permissions <f.FilePermissions>: "rw-:user123:users"
+  state: uploaded
+  progress:
+    current: 2621440
+    total: 2621440
+    percentage: 100
+
+failed_upload <f.FileUpload>:
+  file:
+    name: "readme.txt"
+    extension: txt
+    size <f.FileSize>: 1024bytes
+    mime_type: "text/plain"
+    created_at: "2024-01-15T10:30:00Z"
+    modified_at: "2024-01-15T10:30:00Z"
+    checksum: "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"
+  state: failed
+  error_message: "Upload timeout after 30 seconds"
+
+# File download examples
+downloading_file <f.FileDownload>:
+  file:
+    name: "photo.jpg"
+    extension: jpg
+    size <f.FileSize>: 2.5mb
+    mime_type: "image/jpeg"
+    created_at: "2024-01-15T14:20:00Z"
+    modified_at: "2024-01-15T14:20:00Z"
+    permissions <f.FilePermissions>: "rw-"
+  state: downloading
+  progress:
+    current: 1310720
+    total: 2621440
+    percentage: 50
+  download_url: "https://cdn.example.com/files/photo.jpg"
+
+completed_download <f.FileDownload>:
+  file:
+    name: "readme.txt"
+    extension: txt
+    size <f.FileSize>: 1024bytes
+    mime_type: "text/plain"
+    created_at: "2024-01-15T10:30:00Z"
+    modified_at: "2024-01-15T10:30:00Z"
+    checksum: "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"
+  state: downloaded
+  progress:
+    current: 1024
+    total: 1024
+    percentage: 100
+
+# Directory listing example
+project_files <f.DirectoryListing>:
+  - 
+    name: "main.py"
+    extension: py
+    size <f.FileSize>: 2048bytes
+    mime_type: "text/x-python"
+    modified_at: "2024-01-15T16:45:00Z"
+
+  - 
+    name: "config.yaml"
+    extension: yaml
+    size <f.FileSize>: 512bytes
+    mime_type: "application/x-yaml"
+    modified_at: "2024-01-15T16:30:00Z"
+
+  - 
+    name: "data.json"
+    extension: json
+    size <f.FileSize>: 10240bytes
+    mime_type: "application/json"
+    modified_at: "2024-01-15T16:20:00Z"
+
+  - 
+    name: "logo.png"
+    extension: png
+    size <f.FileSize>: 1.2mb
+    mime_type: "image/png"
+    modified_at: "2024-01-15T15:00:00Z"
+
+  - 
+    name: "archive.zip"
+    extension: zip
+    size <f.FileSize>: 45.8mb
+    mime_type: "application/zip"
+    modified_at: "2024-01-15T14:00:00Z"

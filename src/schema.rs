@@ -601,9 +601,14 @@ fn validate_constructor_keywords(
                 }
                 let raw_decode = rule.get("decode");
                 let raw_from_enum = rule.get("from_enum");
-                if raw_decode.is_some() && raw_from_enum.is_some() {
+                let raw_eq = rule.get("eq");
+                let set_count = [raw_decode, raw_from_enum, raw_eq]
+                    .iter()
+                    .filter(|v| v.is_some())
+                    .count();
+                if set_count > 1 {
                     return Err(SyamlError::SchemaError(format!(
-                        "{rule_path} cannot set both 'decode' and 'from_enum'"
+                        "{rule_path} can only set one of 'decode', 'from_enum', or 'eq'"
                     )));
                 }
                 if let Some(raw_decode) = raw_decode {
@@ -621,6 +626,11 @@ fn validate_constructor_keywords(
                         enum_type_name,
                         &format!("{rule_path}.from_enum"),
                     )?;
+                }
+                if let Some(raw_eq) = raw_eq {
+                    raw_eq.as_str().ok_or_else(|| {
+                        SyamlError::SchemaError(format!("{rule_path}.eq must be a string"))
+                    })?;
                 }
             }
         }

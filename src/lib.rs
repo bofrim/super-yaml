@@ -927,6 +927,15 @@ fn rewrite_schema_type_references(
                         }
                     }
                 }
+                if key == "from_enum" {
+                    if let JsonValue::String(type_name) = child {
+                        if known_type_names.contains(type_name) {
+                            let renamed = rename_map.get(type_name).expect("present").clone();
+                            out.insert(key.clone(), JsonValue::String(renamed));
+                            continue;
+                        }
+                    }
+                }
                 out.insert(
                     key.clone(),
                     rewrite_schema_type_references(child, known_type_names, rename_map),

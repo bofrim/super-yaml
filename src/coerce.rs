@@ -226,6 +226,7 @@ enum MappingDecode {
         type_name: String,
         allowed: HashSet<String>,
     },
+    Eq(String),
 }
 
 fn parse_constructors(
@@ -313,19 +314,22 @@ fn parse_constructors(
                     .ok_or_else(|| {
                         SyamlError::SchemaError(format!("{rule_path}.group must be a string"))
                     })?;
-                let decode = match (rule.get("decode"), rule.get("from_enum")) {
-                    (Some(_), Some(_)) => {
+                let raw_decode = rule.get("decode");
+                let raw_from_enum = rule.get("from_enum");
+                let raw_eq = rule.get("eq");
+                let decode = match (raw_decode, raw_from_enum, raw_eq) {
+                    (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => {
                         return Err(SyamlError::SchemaError(format!(
-                            "{rule_path} cannot set both 'decode' and 'from_enum'"
+                            "{rule_path} can only set one of 'decode', 'from_enum', or 'eq'"
                         )))
                     }
-                    (Some(raw), None) => MappingDecode::Decode(parse_decode_kind(
+                    (Some(raw), None, None) => MappingDecode::Decode(parse_decode_kind(
                         raw.as_str().ok_or_else(|| {
                             SyamlError::SchemaError(format!("{rule_path}.decode must be a string"))
                         })?,
                         &format!("{rule_path}.decode"),
                     )?),
-                    (None, Some(raw_from_enum)) => {
+                    (None, Some(raw_from_enum), None) => {
                         let enum_type_name = raw_from_enum.as_str().ok_or_else(|| {
                             SyamlError::SchemaError(format!(
                                 "{rule_path}.from_enum must be a string"
@@ -341,7 +345,13 @@ fn parse_constructors(
                             allowed,
                         }
                     }
-                    (None, None) => MappingDecode::Decode(DecodeKind::Auto),
+                    (None, None, Some(raw_eq)) => {
+                        let literal = raw_eq.as_str().ok_or_else(|| {
+                            SyamlError::SchemaError(format!("{rule_path}.eq must be a string"))
+                        })?;
+                        MappingDecode::Eq(literal.to_string())
+                    }
+                    (None, None, None) => MappingDecode::Decode(DecodeKind::Auto),
                 };
                 mappings.insert(
                     destination.clone(),
@@ -453,6 +463,7 @@ fn decode_capture(
             }
             Ok(JsonValue::String(raw.to_string()))
         }
+        MappingDecode::Eq(expected) => Ok(JsonValue::Bool(raw == expected.as_str())),
     }
 }
 

@@ -1,0 +1,224 @@
+---!syaml/v0
+---module
+name: files
+version: "1.0.0"
+description: "File handling types for paths, extensions, sizes, and metadata"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---meta
+imports:
+  prim:
+    path: ../primitives/module.syaml
+    sections: [schema]
+  time:
+    path: ../time/module.syaml
+    sections: [schema]
+  net:
+    path: ../net/module.syaml
+    sections: [schema]
+
+---schema
+FileExtension:
+  - txt
+  - json
+  - yaml
+  - xml
+  - csv
+  - md
+  - html
+  - css
+  - js
+  - ts
+  - py
+  - rb
+  - java
+  - cpp
+  - c
+  - h
+  - go
+  - rs
+  - php
+  - sh
+  - bat
+  - ps1
+  - sql
+  - db
+  - sqlite
+  - pdf
+  - doc
+  - docx
+  - xls
+  - xlsx
+  - ppt
+  - pptx
+  - odt
+  - ods
+  - odp
+  - zip
+  - tar
+  - gz
+  - bz2
+  - 7z
+  - rar
+  - jpg
+  - jpeg
+  - png
+  - gif
+  - bmp
+  - tiff
+  - webp
+  - svg
+  - ico
+  - mp3
+  - wav
+  - flac
+  - aac
+  - ogg
+  - mp4
+  - avi
+  - mkv
+  - mov
+  - wmv
+  - flv
+  - webm
+
+FileSizeUnit:
+  - bytes
+  - kb
+  - mb
+  - gb
+  - tb
+
+FileSize:
+  type: object
+  properties:
+    amount:
+      type: prim.NonNegativeNumber
+    unit: FileSizeUnit
+  constraints:
+    - "amount >= 0"
+  constructors:
+    from_text:
+      regex: '^(?<amount>\d+(?:\.\d+)?)(?<raw_unit>[a-zA-Z]+)$'
+      map:
+        amount:
+          group: amount
+          decode: number
+        unit:
+          group: raw_unit
+          from_enum: FileSizeUnit
+
+FilePermissions:
+  type: object
+  properties:
+    read: boolean
+    write: boolean
+    execute: boolean
+    owner:
+      type: prim.NonEmptyString
+      optional: true
+    group:
+      type: prim.NonEmptyString
+      optional: true
+  constructors:
+    unix_mode_full:
+      order: 1
+      regex: '^(?<r>[r-])(?<w>[w-])(?<x>[x-]):(?<owner>[^:]+):(?<group>[^:]+)$'
+      map:
+        read:    { group: r, eq: "r" }
+        write:   { group: w, eq: "w" }
+        execute: { group: x, eq: "x" }
+        owner:   { group: owner }
+        group:   { group: group }
+    unix_mode:
+      order: 2
+      regex: '^(?<r>[r-])(?<w>[w-])(?<x>[x-])$'
+      map:
+        read:    { group: r, eq: "r" }
+        write:   { group: w, eq: "w" }
+        execute: { group: x, eq: "x" }
+
+FileState:
+  - pending
+  - uploading
+  - uploaded
+  - downloading
+  - downloaded
+  - processing
+  - processed
+  - failed
+  - cancelled
+
+FileProgress:
+  type: object
+  properties:
+    current: prim.NonNegativeInteger
+    total: prim.PositiveInteger
+    percentage:
+      type: prim.Percentage
+      default: 0
+  constraints:
+    - "current <= total"
+    - "percentage == (current / total) * 100"
+
+FileMetadata:
+  type: object
+  properties:
+    name:
+      type: prim.NonEmptyString
+    extension:
+      type: FileExtension
+      optional: true
+    size: FileSize
+    mime_type:
+      type: net.MimeType
+      optional: true
+    created_at:
+      type: time.IsoDateTime
+      optional: true
+    modified_at:
+      type: time.IsoDateTime
+      optional: true
+    permissions:
+      type: FilePermissions
+      optional: true
+    checksum:
+      type: prim.Sha256Hex
+      optional: true
+
+FileUpload:
+  type: object
+  properties:
+    file: FileMetadata
+    state: FileState
+    progress:
+      type: FileProgress
+      optional: true
+    error_message:
+      type: prim.NonEmptyString
+      optional: true
+    upload_url:
+      type: prim.Url
+      optional: true
+
+FileDownload:
+  type: object
+  properties:
+    file: FileMetadata
+    state: FileState
+    progress:
+      type: FileProgress
+      optional: true
+    error_message:
+      type: prim.NonEmptyString
+      optional: true
+    download_url:
+      type: prim.Url
+      optional: true
+
+DirectoryListing:
+  type: array
+  items: FileMetadata
+  minItems: 0

@@ -1,0 +1,184 @@
+---!syaml/v0
+
+---data
+# Basic image metadata
+photo_metadata <ImageMetadata>:
+  format: jpeg
+  dimensions:
+    width: 1920
+    height: 1080
+    dpi: 300
+  compression: lossy
+  color_space: rgb
+  bit_depth: 24
+  has_alpha: false
+  file_info:
+    name: "vacation.jpg"
+    extension: jpg
+    size:
+      value: 2.3
+      unit: mb
+    mime_type: "image/jpeg"
+    created_at: "2024-01-15T12:00:00Z"
+    modified_at: "2024-01-15T12:00:00Z"
+    checksum: "b2c7f9a8e4d5c6b2f1a8e9d4c6b5a2f8e1d9c4b6a5f2e8d1c9b4a6f5e2d8c1b9a4"
+
+# Video metadata
+tutorial_video <VideoMetadata>:
+  codec: h264
+  container: mp4
+  resolution:
+    width: 1920
+    height: 1080
+    aspect_ratio: "16:9"
+  duration_seconds: 1800
+  bitrate_kbps: 5000
+  frame_rate: 30
+  has_audio: true
+  file_info:
+    name: "tutorial.mp4"
+    extension: mp4
+    size:
+      value: 650
+      unit: mb
+    mime_type: "video/mp4"
+    created_at: "2024-01-15T10:00:00Z"
+    modified_at: "2024-01-15T10:00:00Z"
+
+# Audio metadata
+song_audio <AudioMetadata>:
+  codec: aac
+  container: m4a
+  duration_seconds: 243
+  bitrate_kbps: 256
+  sample_rate_hz: 44100
+  channels: 2
+  channel_layout: stereo
+  file_info:
+    name: "song.m4a"
+    extension: m4a
+    size:
+      value: 7.8
+      unit: mb
+    mime_type: "audio/m4a"
+    created_at: "2024-01-15T09:00:00Z"
+    modified_at: "2024-01-15T09:00:00Z"
+
+# EXIF data example
+camera_exif <ExifData>:
+  camera_make: "Canon"
+  camera_model: "EOS R5"
+  aperture: "f/2.8"
+  shutter_speed: "1/1000"
+  iso: 100
+  focal_length: "50mm"
+  date_taken: "2024-01-15T14:30:00Z"
+  gps_latitude: 40.7128
+  gps_longitude: -74.0060
+
+# Content moderation
+safe_content <ContentModeration>:
+  rating: g
+  flags: [safe]
+  confidence_score: 0.95
+  moderated_at: "2024-01-15T15:00:00Z"
+  moderated_by: "automated_system"
+
+questionable_content <ContentModeration>:
+  rating: pg13
+  flags: [questionable, sensitive]
+  confidence_score: 0.78
+  moderated_at: "2024-01-15T16:00:00Z"
+  moderated_by: "human_moderator"
+
+# Captions
+english_caption <Caption>:
+  text: "A beautiful sunset over the mountains"
+  language: "en"
+  auto_generated: false
+  created_at: "2024-01-15T17:00:00Z"
+
+auto_caption <Caption>:
+  text: "Person speaking to camera about technology"
+  language: "en"
+  auto_generated: true
+  created_at: "2024-01-15T10:30:00Z"
+
+# Rich image example
+landscape_photo <RichImage>:
+  image: photo_metadata
+  orientation: landscape
+  thumbnail:
+    url: "https://cdn.example.com/thumbnails/vacation_thumb.jpg"
+    size:
+      width: 300
+      height: 169
+    format: jpeg
+  exif_data: camera_exif
+  caption: english_caption
+  moderation: safe_content
+  tags: ["nature", "sunset", "mountains", "landscape"]
+  alt_text: "Vibrant orange and pink sunset sky behind snow-capped mountains"
+
+# Rich video example
+educational_video <RichVideo>:
+  video: tutorial_video
+  thumbnail:
+    url: "https://cdn.example.com/thumbnails/tutorial_thumb.jpg"
+    size:
+      width: 320
+      height: 180
+    format: jpeg
+  captions: [auto_caption]
+  moderation: safe_content
+  tags: ["tutorial", "programming", "javascript", "web-development"]
+  description: "Complete guide to modern JavaScript development practices and best practices"
+
+# Rich audio example
+music_track <RichAudio>:
+  audio: song_audio
+  thumbnail:
+    url: "https://cdn.example.com/thumbnails/song_cover.jpg"
+    size:
+      width: 500
+      height: 500
+    format: jpeg
+  lyrics: "Verse 1: [Lyrics here...]"
+  genre: "Pop"
+  album: "Greatest Hits"
+  artist: "Example Artist"
+  track_number: 3
+  year: 2024
+  tags: ["pop", "electronic", "dance", "remix"]
+
+# Square image example
+profile_picture <RichImage>:
+  image:
+    format: png
+    dimensions:
+      width: 512
+      height: 512
+      dpi: 72
+    compression: lossless
+    color_space: rgb
+    bit_depth: 32
+    has_alpha: true
+    file_info:
+      name: "profile.png"
+      extension: png
+      size:
+        value: 245
+        unit: kb
+      mime_type: "image/png"
+      created_at: "2024-01-15T08:00:00Z"
+      modified_at: "2024-01-15T08:00:00Z"
+  orientation: square
+  thumbnail:
+    url: "https://cdn.example.com/thumbnails/profile_thumb.jpg"
+    size:
+      width: 128
+      height: 128
+    format: jpeg
+  moderation: safe_content
+  tags: ["profile", "avatar", "user"]
+  alt_text: "Professional headshot of a person smiling"

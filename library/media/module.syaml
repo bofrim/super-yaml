@@ -1,0 +1,340 @@
+---!syaml/v0
+---module
+name: media
+version: "1.0.0"
+description: "Rich media content types for images, videos, and audio with metadata"
+metadata:
+  owner: library
+  schema_version: "1.0.0"
+
+---meta
+imports:
+  prim:
+    path: ../primitives/module.syaml
+    sections: [schema]
+  time:
+    path: ../time/module.syaml
+    sections: [schema]
+  files:
+    path: ../files/module.syaml
+    sections: [schema]
+
+---schema
+# Image types
+ImageFormat:
+  - jpeg
+  - jpg
+  - png
+  - gif
+  - bmp
+  - tiff
+  - webp
+  - svg
+  - ico
+  - heic
+  - heif
+
+ImageCompression:
+  - lossless
+  - lossy
+
+ColorSpace:
+  - rgb
+  - cmyk
+  - grayscale
+  - indexed
+
+ImageDimensions:
+  type: object
+  properties:
+    width: prim.PositiveInteger
+    height: prim.PositiveInteger
+    dpi:
+      type: prim.PositiveInteger
+      optional: true
+
+ImageMetadata:
+  type: object
+  properties:
+    format: ImageFormat
+    dimensions: ImageDimensions
+    compression:
+      type: ImageCompression
+      optional: true
+    color_space:
+      type: ColorSpace
+      optional: true
+    bit_depth:
+      type: prim.PositiveInteger
+      optional: true
+    has_alpha: boolean
+    file_info: files.FileMetadata
+
+# Video types
+VideoCodec:
+  - h264
+  - h265
+  - vp8
+  - vp9
+  - av1
+  - mpeg4
+  - theora
+  - avc
+
+VideoContainer:
+  - mp4
+  - avi
+  - mkv
+  - mov
+  - wmv
+  - flv
+  - webm
+  - mpeg
+  - ts
+
+VideoResolution:
+  type: object
+  properties:
+    width: prim.PositiveInteger
+    height: prim.PositiveInteger
+    aspect_ratio:
+      type: prim.NonEmptyString
+      optional: true
+
+VideoMetadata:
+  type: object
+  properties:
+    codec: VideoCodec
+    container: VideoContainer
+    resolution: VideoResolution
+    duration_seconds: prim.NonNegativeNumber
+    bitrate_kbps:
+      type: prim.PositiveInteger
+      optional: true
+    frame_rate:
+      type: prim.PositiveNumber
+      optional: true
+    has_audio: boolean
+    file_info: files.FileMetadata
+
+# Audio types
+AudioCodec:
+  - mp3
+  - aac
+  - flac
+  - wav
+  - ogg
+  - opus
+  - alac
+  - vorbis
+  - pcm
+
+AudioContainer:
+  - mp3
+  - wav
+  - flac
+  - aac
+  - ogg
+  - m4a
+  - wma
+
+AudioChannelLayout:
+  - mono
+  - stereo
+  - surround_5_1
+  - surround_7_1
+
+AudioMetadata:
+  type: object
+  properties:
+    codec: AudioCodec
+    container: AudioContainer
+    duration_seconds: prim.NonNegativeNumber
+    bitrate_kbps:
+      type: prim.PositiveInteger
+      optional: true
+    sample_rate_hz:
+      type: prim.PositiveInteger
+      optional: true
+    channels: prim.PositiveInteger
+    channel_layout:
+      type: AudioChannelLayout
+      optional: true
+    file_info: files.FileMetadata
+
+# Media metadata and content moderation
+MediaOrientation:
+  - portrait
+  - landscape
+  - square
+
+ThumbnailSize:
+  type: object
+  properties:
+    width: prim.PositiveInteger
+    height: prim.PositiveInteger
+
+Thumbnail:
+  type: object
+  properties:
+    url: prim.Url
+    size: ThumbnailSize
+    format: ImageFormat
+
+ExifData:
+  type: object
+  properties:
+    camera_make:
+      type: prim.NonEmptyString
+      optional: true
+    camera_model:
+      type: prim.NonEmptyString
+      optional: true
+    aperture:
+      type: prim.NonEmptyString
+      optional: true
+    shutter_speed:
+      type: prim.NonEmptyString
+      optional: true
+    iso:
+      type: prim.PositiveInteger
+      optional: true
+    focal_length:
+      type: prim.NonEmptyString
+      optional: true
+    date_taken:
+      type: time.IsoDateTime
+      optional: true
+    gps_latitude:
+      type: number
+      minimum: -90
+      maximum: 90
+      optional: true
+    gps_longitude:
+      type: number
+      minimum: -180
+      maximum: 180
+      optional: true
+
+ContentRating:
+  - g
+  - pg
+  - pg13
+  - r
+  - nc17
+  - adult
+
+ModerationFlag:
+  - safe
+  - questionable
+  - sensitive
+  - explicit
+  - violent
+  - spam
+  - hate_speech
+
+ContentModeration:
+  type: object
+  properties:
+    rating: ContentRating
+    flags:
+      type: array
+      items: ModerationFlag
+      uniqueItems: true
+    confidence_score:
+      type: prim.Probability
+      optional: true
+    moderated_at:
+      type: time.IsoDateTime
+      optional: true
+    moderated_by:
+      type: prim.NonEmptyString
+      optional: true
+
+Caption:
+  type: object
+  properties:
+    text: prim.NonEmptyString
+    language:
+      type: prim.NonEmptyString
+      optional: true
+    auto_generated: boolean
+    created_at: time.IsoDateTime
+
+# Composite media types
+RichImage:
+  type: object
+  properties:
+    image: ImageMetadata
+    orientation: MediaOrientation
+    thumbnail:
+      type: Thumbnail
+      optional: true
+    exif_data:
+      type: ExifData
+      optional: true
+    caption:
+      type: Caption
+      optional: true
+    moderation:
+      type: ContentModeration
+      optional: true
+    tags:
+      type: array
+      items: prim.NonEmptyString
+      optional: true
+    alt_text:
+      type: prim.NonEmptyString
+      optional: true
+
+RichVideo:
+  type: object
+  properties:
+    video: VideoMetadata
+    thumbnail:
+      type: Thumbnail
+      optional: true
+    captions:
+      type: array
+      items: Caption
+      optional: true
+    moderation:
+      type: ContentModeration
+      optional: true
+    tags:
+      type: array
+      items: prim.NonEmptyString
+      optional: true
+    description:
+      type: prim.NonEmptyString
+      optional: true
+
+RichAudio:
+  type: object
+  properties:
+    audio: AudioMetadata
+    thumbnail:
+      type: Thumbnail
+      optional: true
+    lyrics:
+      type: prim.NonEmptyString
+      optional: true
+    genre:
+      type: prim.NonEmptyString
+      optional: true
+    album:
+      type: prim.NonEmptyString
+      optional: true
+    artist:
+      type: prim.NonEmptyString
+      optional: true
+    track_number:
+      type: prim.PositiveInteger
+      optional: true
+    year:
+      type: prim.PositiveInteger
+      optional: true
+    tags:
+      type: array
+      items: prim.NonEmptyString
+      optional: true
