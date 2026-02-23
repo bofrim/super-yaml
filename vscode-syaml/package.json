@@ -28,7 +28,9 @@
     "onCommand:syaml.saveJson",
     "onCommand:syaml.saveRust",
     "onCommand:syaml.saveTypeScript",
-    "onCommand:syaml.saveProto"
+    "onCommand:syaml.saveProto",
+    "onCommand:syaml.previewDocs",
+    "onCommand:syaml.saveDocs"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -120,6 +122,16 @@
       {
         "command": "syaml.saveProto",
         "title": "SYAML: Save as Protobuf",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.previewDocs",
+        "title": "SYAML: Preview as HTML Docs",
+        "category": "SYAML"
+      },
+      {
+        "command": "syaml.saveDocs",
+        "title": "SYAML: Save as HTML Docs",
         "category": "SYAML"
       }
     ],

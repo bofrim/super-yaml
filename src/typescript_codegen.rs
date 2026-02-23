@@ -8,7 +8,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::ast::{ImportBinding, ParsedDocument};
 use crate::schema::parse_field_version_meta;
-use crate::{parse_document, SyamlError};
+use crate::{parse_document, parse_document_or_manifest, SyamlError};
 
 const TYPESCRIPT_KEYWORDS: &[&str] = &[
     "break",
@@ -161,7 +161,7 @@ fn collect_types_from_file(
         ))
     })?;
 
-    let parsed = parse_document(&input)?;
+    let parsed = parse_document_or_manifest(&input)?;
     let exported = collect_exported_types(parsed, base_dir, ctx);
 
     ctx.stack.pop();

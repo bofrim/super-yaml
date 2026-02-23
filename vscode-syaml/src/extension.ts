@@ -35,7 +35,7 @@ interface ExecError extends Error {
   stderr?: string | Buffer;
 }
 
-type PreviewFormat = "yaml" | "json" | "rust" | "typescript" | "proto";
+type PreviewFormat = "yaml" | "json" | "rust" | "typescript" | "proto" | "html";
 
 const PREVIEW_FORMAT_META: Record<
   PreviewFormat,
@@ -45,7 +45,8 @@ const PREVIEW_FORMAT_META: Record<
   json:       { cliFlag: "json",  ext: ".json" },
   rust:       { cliFlag: "rust",  ext: ".rs"   },
   typescript: { cliFlag: "ts",    ext: ".ts"   },
-  proto:      { cliFlag: "proto", ext: ".proto" }
+  proto:      { cliFlag: "proto", ext: ".proto" },
+  html:       { cliFlag: "html",  ext: ".html"  }
 };
 
 // Import source formats: schema/definition languages that can be converted to .syaml.
@@ -140,6 +141,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(registerPreviewCommand("syaml.previewRust", "rust"));
   context.subscriptions.push(registerPreviewCommand("syaml.previewTypeScript", "typescript"));
   context.subscriptions.push(registerPreviewCommand("syaml.previewProto", "proto"));
+  context.subscriptions.push(registerPreviewCommand("syaml.previewDocs", "html"));
 
   const registerSaveCommand = (
     commandId: string,
@@ -161,6 +163,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(registerSaveCommand("syaml.saveRust", "rust"));
   context.subscriptions.push(registerSaveCommand("syaml.saveTypeScript", "typescript"));
   context.subscriptions.push(registerSaveCommand("syaml.saveProto", "proto"));
+  context.subscriptions.push(registerSaveCommand("syaml.saveDocs", "html"));
 
   context.subscriptions.push(
     vscode.commands.registerCommand("syaml.import.preview", async () => {
@@ -378,7 +381,7 @@ class SyamlSemanticTokensProvider
   ): vscode.ProviderResult<vscode.SemanticTokens> {
     const collector = new TokenCollector();
     const typeDefinitionKeysByLine = collectTypeDefinitionKeyRangesByLine(document);
-    let currentSection: "meta" | "schema" | "data" | undefined;
+    let currentSection: "meta" | "schema" | "data" | "functional" | "module" | undefined;
 
     for (let line = 0; line < document.lineCount; line += 1) {
       const text = document.lineAt(line).text;
@@ -398,9 +401,9 @@ class SyamlSemanticTokensProvider
         collector.add(line, markerMatch[1].length, markerMatch[2].length, "keyword");
       }
 
-      const sectionMatch = /^(\s*)---(meta|schema|data)\s*$/.exec(code);
+      const sectionMatch = /^(\s*)---(meta|schema|data|functional|module)\s*$/.exec(code);
       if (sectionMatch) {
-        currentSection = sectionMatch[2] as "meta" | "schema" | "data";
+        currentSection = sectionMatch[2] as "meta" | "schema" | "data" | "functional" | "module";
         const marker = `---${sectionMatch[2]}`;
         collector.add(
           line,
@@ -2229,6 +2232,13 @@ async function previewExpandedOutput(
   previewProvider: SyamlPreviewContentProvider,
   format: PreviewFormat = "yaml"
 ): Promise<void> {
+  if (path.basename(document.uri.fsPath) === "module.syaml") {
+    void vscode.window.showInformationMessage(
+      "module.syaml is a module manifest file and cannot be compiled to a data output."
+    );
+    return;
+  }
+
   let parser: ParserCommand;
   try {
     parser = await resolveParserCommand(document, extensionPath);
@@ -2287,6 +2297,13 @@ async function saveExpandedOutput(
   extensionPath: string,
   format: PreviewFormat = "yaml"
 ): Promise<void> {
+  if (path.basename(document.uri.fsPath) === "module.syaml") {
+    void vscode.window.showInformationMessage(
+      "module.syaml is a module manifest file and cannot be compiled to a data output."
+    );
+    return;
+  }
+
   let parser: ParserCommand;
   try {
     parser = await resolveParserCommand(document, extensionPath);

@@ -1,10 +1,12 @@
-use std::{collections::HashSet, env, path::{Path, PathBuf}, process::ExitCode};
+use std::{collections::{BTreeMap, BTreeSet, HashSet}, env, path::{Path, PathBuf}, process::ExitCode};
 
 use super_yaml::{
+    collect_import_graph, discover_module_members, generate_html_docs_site,
     compile_document_from_path_with_fetch, from_json_schema_path,
-    generate_proto_types_from_path, generate_rust_types_and_data_from_path,
-    generate_rust_types_from_path, generate_typescript_types_and_data_from_path,
-    generate_typescript_types_from_path, EnvProvider, ProcessEnvProvider,
+    generate_html_docs_from_path, generate_proto_types_from_path,
+    generate_rust_types_and_data_from_path, generate_rust_types_from_path,
+    generate_typescript_types_and_data_from_path, generate_typescript_types_from_path,
+    EnvProvider, ProcessEnvProvider,
 };
 use super_yaml::{parse_document, to_json_schema};
 
@@ -17,6 +19,7 @@ enum OutputFormat {
     TypeScript,
     Proto,
     FunctionalJson,
+    HtmlDocs,
 }
 
 #[derive(Debug)]
@@ -27,6 +30,12 @@ struct CompileOptions {
     cache_dir: Option<PathBuf>,
     update_imports: bool,
     skip_data: bool,
+}
+
+#[derive(Debug)]
+struct DocsOptions {
+    output_dir: PathBuf,
+    follow_imports: bool,
 }
 
 /// Env provider that allows only explicitly listed process env keys.
@@ -106,6 +115,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 options.skip_data,
             )
         }
+        "docs" => {
+            let parsed_options = parse_docs_options(&args[3..])?;
+            run_docs(&file, &parsed_options)
+        }
         _ => Err(format!("unknown command '{command}'")),
     }
 }
@@ -179,10 +192,95 @@ fn run_compile(
             let parsed = parse_document(&input).map_err(|e| e.to_string())?;
             to_json_schema(&parsed.schema, pretty)
         }
+        OutputFormat::HtmlDocs => generate_html_docs_from_path(file),
     }
     .map_err(|e| e.to_string())?;
 
     println!("{output}");
+    Ok(())
+}
+
+fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
+    let mut roots: BTreeSet<PathBuf> = BTreeSet::new();
+
+    let base_dir: PathBuf;
+
+    let file_name = input_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    if file_name == "module.syaml" {
+        // It's a module manifest: discover all member .syaml files
+        base_dir = input_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+
+        let members = discover_module_members(input_path).map_err(|e| e.to_string())?;
+        for member in members {
+            if options.follow_imports {
+                let graph = collect_import_graph(&member).map_err(|e| e.to_string())?;
+                for path in graph.into_keys() {
+                    roots.insert(path);
+                }
+            }
+            roots.insert(member);
+        }
+    } else if input_path.is_dir() {
+        base_dir = input_path.to_path_buf();
+
+        let entries = std::fs::read_dir(input_path)
+            .map_err(|e| format!("failed to read directory '{}': {e}", input_path.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("failed to read directory entry: {e}"))?;
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext == "syaml" {
+                        if options.follow_imports {
+                            let graph = collect_import_graph(&path).map_err(|e| e.to_string())?;
+                            for p in graph.into_keys() {
+                                roots.insert(p);
+                            }
+                        }
+                        roots.insert(path);
+                    }
+                }
+            }
+        }
+    } else {
+        // Regular .syaml file
+        base_dir = input_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+
+        if options.follow_imports {
+            let graph = collect_import_graph(input_path).map_err(|e| e.to_string())?;
+            for path in graph.into_keys() {
+                roots.insert(path);
+            }
+        }
+        roots.insert(input_path.clone());
+    }
+
+    let roots_vec: Vec<PathBuf> = roots.into_iter().collect();
+    let files: BTreeMap<String, String> =
+        generate_html_docs_site(&roots_vec, &base_dir).map_err(|e| e.to_string())?;
+
+    let output_dir = &options.output_dir;
+    let count = files.len();
+
+    for (relative_path, content) in &files {
+        let dest = output_dir.join(relative_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create directory '{}': {e}", parent.display()))?;
+        }
+        std::fs::write(&dest, content)
+            .map_err(|e| format!("failed to write '{}': {e}", dest.display()))?;
+        eprintln!("wrote: {}", dest.display());
+    }
+
+    eprintln!("Generated {count} files in {}", output_dir.display());
     Ok(())
 }
 
@@ -241,10 +339,14 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 format = OutputFormat::FunctionalJson;
                 i += 1;
             }
+            "--html" => {
+                format = OutputFormat::HtmlDocs;
+                i += 1;
+            }
             "--format" => {
                 if i + 1 >= args.len() {
                     return Err(
-                        "missing value for --format (expected json, json-schema, yaml, rust, ts, typescript, or proto)"
+                        "missing value for --format (expected json, json-schema, yaml, rust, ts, typescript, proto, or html)"
                             .to_string(),
                     );
                 }
@@ -256,9 +358,10 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                     "ts" | "typescript" => OutputFormat::TypeScript,
                     "proto" => OutputFormat::Proto,
                     "functional-json" => OutputFormat::FunctionalJson,
+                    "html" => OutputFormat::HtmlDocs,
                     other => {
                         return Err(format!(
-                            "invalid --format value '{other}' (expected json, json-schema, yaml, rust, ts, typescript, or proto)"
+                            "invalid --format value '{other}' (expected json, json-schema, yaml, rust, ts, typescript, proto, or html)"
                         ))
                     }
                 };
@@ -293,6 +396,36 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
         cache_dir,
         update_imports,
         skip_data,
+    })
+}
+
+fn parse_docs_options(args: &[String]) -> Result<DocsOptions, String> {
+    let mut output_dir: Option<PathBuf> = None;
+    let mut follow_imports = false;
+    let mut i = 0usize;
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output" => {
+                if i + 1 >= args.len() {
+                    return Err("missing value for --output".to_string());
+                }
+                output_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--follow-imports" => {
+                follow_imports = true;
+                i += 1;
+            }
+            other => return Err(format!("unknown option '{other}'")),
+        }
+    }
+
+    let output_dir = output_dir.ok_or_else(|| "--output <dir> is required for docs command".to_string())?;
+
+    Ok(DocsOptions {
+        output_dir,
+        follow_imports,
     })
 }
 
@@ -353,9 +486,10 @@ fn print_usage() {
     eprintln!("  super-yaml from-json-schema <schema.json> [--output <file.syaml>]");
     eprintln!("  super-yaml validate <file> [--allow-env KEY]...");
     eprintln!(
-        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript|proto] [--allow-env KEY]..."
+        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript|proto|html] [--allow-env KEY]..."
     );
-    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts|--proto] [--allow-env KEY]...");
+    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts|--proto|--html] [--allow-env KEY]...");
+    eprintln!("  super-yaml docs <path> --output <dir> [--follow-imports]");
     eprintln!();
     eprintln!("codegen options (--rust / --ts):");
     eprintln!("  --skip-data            emit type definitions only; omit data constants/fns");
@@ -364,6 +498,10 @@ fn print_usage() {
     eprintln!("  --update-imports       force re-fetch of all URL imports (bypass lockfile cache)");
     eprintln!("  --cache-dir <path>     override default URL import cache directory");
     eprintln!();
+    eprintln!("docs options:");
+    eprintln!("  --output <dir>         directory to write generated HTML files into");
+    eprintln!("  --follow-imports       also generate docs for all transitively imported files");
+    eprintln!();
     eprintln!(
         "note: environment access is disabled by default; use --allow-env to permit specific keys."
     );
@@ -371,7 +509,7 @@ fn print_usage() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_compile_options, parse_validate_options, OutputFormat};
+    use super::{parse_compile_options, parse_docs_options, parse_validate_options, OutputFormat};
 
     #[test]
     fn parse_compile_yaml_format() {
@@ -475,5 +613,32 @@ mod tests {
         let err = parse_compile_options(&args).unwrap_err();
         assert!(err.contains("ts"));
         assert!(err.contains("typescript"));
+    }
+
+    #[test]
+    fn parse_docs_requires_output() {
+        let args = vec!["--follow-imports".to_string()];
+        let err = parse_docs_options(&args).unwrap_err();
+        assert!(err.contains("--output"));
+    }
+
+    #[test]
+    fn parse_docs_output_and_follow_imports() {
+        let args = vec![
+            "--output".to_string(),
+            "/tmp/docs".to_string(),
+            "--follow-imports".to_string(),
+        ];
+        let opts = parse_docs_options(&args).unwrap();
+        assert_eq!(opts.output_dir.to_str().unwrap(), "/tmp/docs");
+        assert!(opts.follow_imports);
+    }
+
+    #[test]
+    fn parse_docs_output_only() {
+        let args = vec!["--output".to_string(), "/tmp/docs".to_string()];
+        let opts = parse_docs_options(&args).unwrap();
+        assert_eq!(opts.output_dir.to_str().unwrap(), "/tmp/docs");
+        assert!(!opts.follow_imports);
     }
 }

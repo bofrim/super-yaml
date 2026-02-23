@@ -59,6 +59,12 @@ pub mod verify;
 pub mod yaml_writer;
 /// Module manifest parsing, discovery, and import policy enforcement.
 pub mod module;
+/// HTML documentation generator for `.syaml` files.
+pub mod html_docs_gen;
+pub use html_docs_gen::{
+    collect_import_graph, discover_module_members, generate_html_docs, generate_html_docs_from_path,
+    generate_html_docs_site,
+};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -133,6 +139,56 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
                 return Err(SyamlError::SectionError(
                     "'---module' section is only allowed in module.syaml manifest files".to_string(),
                 ));
+            }
+            _ => unreachable!("validated by section scanner"),
+        }
+    }
+
+    Ok(ParsedDocument {
+        version,
+        meta,
+        schema,
+        data,
+        functional,
+    })
+}
+
+/// Parses a `.syaml` document or module manifest for schema extraction.
+///
+/// Like [`parse_document`], but silently skips `---module` sections rather than
+/// rejecting them. Use this when parsing files that may be module manifests
+/// (e.g., when resolving schema imports in code generation).
+pub fn parse_document_or_manifest(input: &str) -> Result<ParsedDocument, SyamlError> {
+    let (version, sections) = scan_sections(input)?;
+
+    let mut meta: Option<Meta> = None;
+    let mut schema = parse_schema(&JsonValue::Object(serde_json::Map::new()))?;
+    let mut data = DataDoc {
+        value: JsonValue::Object(serde_json::Map::new()),
+        type_hints: BTreeMap::new(),
+        freeze_markers: BTreeMap::new(),
+    };
+    let mut functional: Option<crate::ast::FunctionalDoc> = None;
+
+    for section in sections {
+        let section_value = parse_section_value(&section.name, &section.body)?;
+        match section.name.as_str() {
+            "meta" => {
+                meta = Some(parse_meta(&section_value)?);
+            }
+            "schema" => {
+                schema = parse_schema(&section_value)?;
+            }
+            "data" => {
+                let (value, type_hints, freeze_markers) = normalize_data_with_hints(&section_value)?;
+                data = DataDoc { value, type_hints, freeze_markers };
+            }
+            "functional" => {
+                functional = Some(functional::parse_functional(&section_value)?);
+            }
+            "module" => {
+                // Skip — the module section carries manifest metadata only.
+                // Full manifest parsing is done by module::parse_module_manifest.
             }
             _ => unreachable!("validated by section scanner"),
         }
