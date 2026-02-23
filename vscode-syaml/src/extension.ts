@@ -2518,7 +2518,9 @@ function extractDiagnosticPathFromMessage(message: string): string | undefined {
     /\bpath\s+'(schema\.[A-Za-z0-9_.\[\]]+)'/i,
     /normalized\s+'(\$[A-Za-z0-9_.\[\]]+)'/i,
     /\bat\s+'?(\$[A-Za-z0-9_.\[\]]+)'?/i,
-    /\bpath\s+'(\$[A-Za-z0-9_.\[\]]+)'/i
+    /\bpath\s+'(\$[A-Za-z0-9_.\[\]]+)'/i,
+    // functional error: functional.FuncName: ... → highlight the function name
+    /\bfunctional error:\s*(functional\.[A-Za-z0-9_]+)/i
   ];
   for (const pattern of patterns) {
     const match = pattern.exec(message);
@@ -2578,6 +2580,9 @@ function collectPathLocationsForPrefix(
   }
   if (path.startsWith("$")) {
     return collectDataKeyLocations(document);
+  }
+  if (path.startsWith("functional.")) {
+    return collectFunctionalKeyLocations(document);
   }
   return [];
 }
@@ -2728,6 +2733,56 @@ function collectSchemaKeyLocations(document: vscode.TextDocument): SchemaKeyLoca
     }
 
     const path = `schema.${withoutWrapper.join(".")}`;
+    const start = indent + keyInfo.keyOffset;
+    locations.push({
+      path,
+      normalizedPath: normalizeJsonPath(path),
+      line,
+      start,
+      end: start + keyInfo.key.length
+    });
+  }
+
+  return locations;
+}
+
+function collectFunctionalKeyLocations(document: vscode.TextDocument): SchemaKeyLocation[] {
+  const bounds = findSectionBounds(document, "functional");
+  if (!bounds) {
+    return [];
+  }
+
+  const locations: SchemaKeyLocation[] = [];
+  const stack: ParseStackEntry[] = [];
+
+  for (let line = bounds.startLine; line < bounds.endLine; line += 1) {
+    const code = lineWithoutComment(document.lineAt(line).text);
+    if (code.trim().length === 0) {
+      continue;
+    }
+
+    // Skip list items (bare string entries under strict/semantic)
+    if (/^\s*-/.test(code)) {
+      continue;
+    }
+
+    const keyMatch = /^(\s*)([^:#][^:]*?)(\s*):/.exec(code);
+    if (!keyMatch) {
+      continue;
+    }
+
+    const indent = keyMatch[1].length;
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+
+    const keyInfo = parseCanonicalKey(keyMatch[2]);
+    if (!keyInfo) {
+      continue;
+    }
+
+    stack.push({ indent, path: keyInfo.key });
+    const path = `functional.${stack.map((entry) => entry.path).join(".")}`;
     const start = indent + keyInfo.keyOffset;
     locations.push({
       path,
@@ -2966,7 +3021,7 @@ function resolveImportPathUri(
 
 function findSectionBounds(
   document: vscode.TextDocument,
-  sectionName: "meta" | "schema" | "data"
+  sectionName: "meta" | "schema" | "data" | "functional"
 ): { startLine: number; endLine: number } | undefined {
   const marker = `---${sectionName}`;
   for (let i = 0; i < document.lineCount; i += 1) {
@@ -2977,7 +3032,7 @@ function findSectionBounds(
     let endLine = document.lineCount;
     for (let j = i + 1; j < document.lineCount; j += 1) {
       const lineText = document.lineAt(j).text.trim();
-      if (/^---(meta|schema|data)\s*$/.test(lineText)) {
+      if (/^---(meta|schema|data|functional)\s*$/.test(lineText)) {
         endLine = j;
         break;
       }

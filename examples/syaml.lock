@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "entries": {
+    "https://raw.githubusercontent.com/bofrim/super-yaml/f190001f9c289501bb821f1c9e449bbf8f1f6799/examples/verified_import_shared.syaml": {
+      "hash": "sha256:3f3594242aef38ea555f6dafacd6ca90b77b2ae7eb7f4e0eba551eaf37263cb5",
+      "file_version": "1.0.0",
+      "cached_path": "/Users/bradofrim/.cache/super_yaml/ca0831dd690c5dbe.syaml",
+      "fetched_at": "2026-02-21T01:01:42Z"
+    }
+  }
+}

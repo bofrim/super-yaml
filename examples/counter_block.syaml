@@ -1,0 +1,88 @@
+---!syaml/v0
+---schema
+# Score can only ever increase — schema-level monotone constraint.
+Score:
+  type: integer
+  minimum: 0
+  mutability: monotone_increase
+
+# Player name is immutable after initial write.
+PlayerName:
+  type: string
+  mutability: frozen
+
+# Level label can be fully replaced.
+LevelLabel:
+  type: string
+  mutability: replace
+
+---data
+player_name <PlayerName>: "Alice"
+score <Score>: 0
+# high_score is instance-frozen with ^: even though Score allows
+# monotone increases, this specific key is locked at the instance level.
+high_score^: 9999
+level <LevelLabel>: "Beginner"
+
+---functional
+# AddPoints is allowed to read and increment the live score,
+# but may not touch the instance-frozen high_score key.
+AddPoints:
+  inputs:
+    points:
+      type: integer
+      mutable: false
+  output:
+    type: Score
+  permissions:
+    data:
+      read:
+        - "$.score"
+        - "$.high_score"
+      write:
+        - "$.score"
+  specification:
+    preconditions:
+      strict:
+        - "input.points > 0"
+        - "input.points < data.high_score"
+      semantic:
+        - "amount must be positive and less than the high score ceiling"
+    postconditions:
+      strict:
+        - "output >= input.points"
+      semantic:
+        - "score increases by the given points"
+
+# GetSnapshot reads the full counter state; writes nothing.
+GetSnapshot:
+  inputs:
+    include_level: boolean
+  output:
+    type: object
+  permissions:
+    data:
+      read:
+        - "$.player_name"
+        - "$.score"
+        - "$.high_score"
+        - "$.level"
+
+# AdvanceLevel may replace the level label; it has no write access
+# to score or player_name.
+AdvanceLevel:
+  inputs:
+    new_level: string
+  permissions:
+    data:
+      read:
+        - "$.level"
+      write:
+        - "$.level"
+  specification:
+    description: "Promotes the player to a new level tier."
+    preconditions:
+      strict:
+        - "input.new_level != data.level"
+      semantic:
+        - "new_level must be non-empty and different from the current level"

@@ -21,6 +21,7 @@ fn eval_with(
         unresolved_paths: unresolved,
         current_value,
         current_scope: None,
+        named_scopes: BTreeMap::new(),
     };
     evaluate(&expr, &ctx)
 }

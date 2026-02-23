@@ -880,11 +880,24 @@ pub fn generate_typescript_types_and_data_from_path(
     // Render data items.
     let data_output = render_typescript_data(&compiled.value, &type_hints, &type_names);
 
-    if data_output.is_empty() {
+    let functional_output = if let Some(ref func_doc) = parsed.functional {
+        crate::functional::generate_typescript_function_stubs(func_doc, &schemas.types)
+    } else {
+        String::new()
+    };
+
+    if data_output.is_empty() && functional_output.is_empty() {
         return Ok(types_output);
     }
 
-    Ok(format!("{types_output}\n// --- Data ---\n\n{data_output}"))
+    let mut result = types_output;
+    if !data_output.is_empty() {
+        result = format!("{result}\n// --- Data ---\n\n{data_output}");
+    }
+    if !functional_output.is_empty() {
+        result = format!("{result}\n{functional_output}");
+    }
+    Ok(result)
 }
 
 fn render_typescript_data(

@@ -25,6 +25,8 @@ pub mod coerce;
 pub mod error;
 /// URL-based import fetching, disk caching, and lockfile management.
 pub mod fetch;
+/// Parsing and validation for the `---functional` section.
+pub mod functional;
 /// Expression lexer/parser/evaluator used by derived values and constraints.
 pub mod expr;
 /// Minimal YAML subset parser used for section bodies.
@@ -47,6 +49,8 @@ pub mod typescript_codegen;
 pub mod proto_codegen;
 /// JSON Schema to super_yaml schema conversion.
 pub mod json_schema_import;
+/// super_yaml schema to JSON Schema export.
+pub mod json_schema_export;
 /// Constraint and type-hint validation routines.
 pub mod validate;
 /// Import integrity verification: hash, signature, and version checks.
@@ -81,6 +85,7 @@ pub use typescript_codegen::{
 };
 pub use proto_codegen::{generate_proto_types, generate_proto_types_from_path};
 pub use json_schema_import::{from_json_schema, from_json_schema_path};
+pub use json_schema_export::to_json_schema;
 use validate::{
     build_effective_constraints, validate_constraints_with_imports, validate_type_hints,
     validate_versioned_fields,
@@ -99,7 +104,9 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
     let mut data = DataDoc {
         value: JsonValue::Object(serde_json::Map::new()),
         type_hints: BTreeMap::new(),
+        freeze_markers: BTreeMap::new(),
     };
+    let mut functional: Option<crate::ast::FunctionalDoc> = None;
 
     for section in sections {
         let section_value = parse_section_value(&section.name, &section.body)?;
@@ -111,8 +118,11 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
                 schema = parse_schema(&section_value)?;
             }
             "data" => {
-                let (value, type_hints) = normalize_data_with_hints(&section_value)?;
-                data = DataDoc { value, type_hints };
+                let (value, type_hints, freeze_markers) = normalize_data_with_hints(&section_value)?;
+                data = DataDoc { value, type_hints, freeze_markers };
+            }
+            "functional" => {
+                functional = Some(functional::parse_functional(&section_value)?);
             }
             _ => unreachable!("validated by section scanner"),
         }
@@ -123,6 +133,7 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
         meta,
         schema,
         data,
+        functional,
     })
 }
 
@@ -218,6 +229,21 @@ pub fn compile_document_to_yaml(
 ) -> Result<String, SyamlError> {
     let compiled = compile_document(input, env_provider)?;
     Ok(compiled.to_yaml_string())
+}
+
+/// Parses a `.syaml` document and returns a JSON Schema document derived from
+/// its `schema` section.
+///
+/// The `env_provider` parameter is accepted for API consistency but is not used,
+/// since schema export does not require expression or environment resolution.
+/// Set `pretty` to `true` for indented output.
+pub fn compile_document_to_json_schema(
+    input: &str,
+    _env_provider: &dyn EnvProvider,
+    pretty: bool,
+) -> Result<String, SyamlError> {
+    let parsed = parse_document(input)?;
+    json_schema_export::to_json_schema(&parsed.schema, pretty)
 }
 
 #[derive(Clone)]
@@ -356,6 +382,18 @@ fn compile_parsed_document(
 
     let warnings =
         validate_versioned_fields(&data, &parsed.data.type_hints, &schema, target_schema_version.as_ref())?;
+
+    if let Some(ref func_doc) = parsed.functional {
+        let import_aliases: std::collections::BTreeSet<String> = parsed.meta.iter()
+            .flat_map(|m| m.imports.keys().cloned())
+            .collect();
+        let all_types = schema.types.clone();
+        functional::validate_functional_type_references(func_doc, &all_types)?;
+        functional::validate_permission_data_paths(func_doc, &data, &import_aliases)?;
+        functional::validate_permission_mutability_alignment(func_doc, &schema, &parsed.data.type_hints)?;
+        functional::validate_permission_instance_lock_conflicts(func_doc, &parsed.data.freeze_markers)?;
+        functional::validate_specification_strict_conditions(func_doc)?;
+    }
 
     strip_private_top_level_data_keys(&mut data);
 

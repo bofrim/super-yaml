@@ -56,6 +56,12 @@ pub enum SyamlError {
     /// HTTP fetch or remote-import failure.
     #[error("fetch error: {0}")]
     FetchError(String),
+    /// Parse or validation error in the `---functional` section.
+    #[error("functional error: {0}")]
+    FunctionalError(String),
+    /// Invalid mutability keyword usage in `---schema`.
+    #[error("mutability error: {0}")]
+    MutabilityError(String),
     /// Filesystem I/O error from CLI or callers that propagate I/O.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

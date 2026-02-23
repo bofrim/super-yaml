@@ -6,14 +6,17 @@ use super_yaml::{
     generate_rust_types_from_path, generate_typescript_types_and_data_from_path,
     generate_typescript_types_from_path, EnvProvider, ProcessEnvProvider,
 };
+use super_yaml::{parse_document, to_json_schema};
 
 #[derive(Clone, Copy, Debug)]
 enum OutputFormat {
     Json,
+    JsonSchema,
     Yaml,
     Rust,
     TypeScript,
     Proto,
+    FunctionalJson,
 }
 
 #[derive(Debug)]
@@ -159,6 +162,23 @@ fn run_compile(
             }
         }
         OutputFormat::Proto => generate_proto_types_from_path(file),
+        OutputFormat::FunctionalJson => {
+            let input = std::fs::read_to_string(file)
+                .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+            let parsed = parse_document(&input).map_err(|e| e.to_string())?;
+            match parsed.functional {
+                Some(ref func_doc) => {
+                    super_yaml::functional::functional_to_json(func_doc, pretty)
+                }
+                None => Ok("{}".to_string()),
+            }
+        }
+        OutputFormat::JsonSchema => {
+            let input = std::fs::read_to_string(file)
+                .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+            let parsed = parse_document(&input).map_err(|e| e.to_string())?;
+            to_json_schema(&parsed.schema, pretty)
+        }
     }
     .map_err(|e| e.to_string())?;
 
@@ -213,22 +233,32 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 format = OutputFormat::Proto;
                 i += 1;
             }
+            "--json-schema" => {
+                format = OutputFormat::JsonSchema;
+                i += 1;
+            }
+            "--functional-json" => {
+                format = OutputFormat::FunctionalJson;
+                i += 1;
+            }
             "--format" => {
                 if i + 1 >= args.len() {
                     return Err(
-                        "missing value for --format (expected json, yaml, rust, ts, typescript, or proto)"
+                        "missing value for --format (expected json, json-schema, yaml, rust, ts, typescript, or proto)"
                             .to_string(),
                     );
                 }
                 format = match args[i + 1].as_str() {
                     "json" => OutputFormat::Json,
+                    "json-schema" => OutputFormat::JsonSchema,
                     "yaml" => OutputFormat::Yaml,
                     "rust" => OutputFormat::Rust,
                     "ts" | "typescript" => OutputFormat::TypeScript,
                     "proto" => OutputFormat::Proto,
+                    "functional-json" => OutputFormat::FunctionalJson,
                     other => {
                         return Err(format!(
-                            "invalid --format value '{other}' (expected json, yaml, rust, ts, typescript, or proto)"
+                            "invalid --format value '{other}' (expected json, json-schema, yaml, rust, ts, typescript, or proto)"
                         ))
                     }
                 };

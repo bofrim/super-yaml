@@ -61,6 +61,10 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
 
     validate_versioned_field_annotations(&types)?;
 
+    for (type_name, type_schema) in &types {
+        validate_mutability_keywords(type_schema, &format!("schema.{}", type_name))?;
+    }
+
     Ok(SchemaDoc {
         types,
         type_constraints,
@@ -571,7 +575,7 @@ fn validate_type_constraint_variable_scope(
     Ok(())
 }
 
-fn collect_var_paths(expr: &Expr, out: &mut Vec<Vec<String>>) {
+pub(crate) fn collect_var_paths(expr: &Expr, out: &mut Vec<Vec<String>>) {
     match expr {
         Expr::Var(path) => out.push(path.clone()),
         Expr::Unary { expr, .. } => collect_var_paths(expr, out),
@@ -1531,4 +1535,111 @@ pub fn validate_strict_field_numbers(types: &BTreeMap<String, JsonValue>) -> Res
         }
     }
     Ok(())
+}
+
+use crate::ast::MutabilityMode;
+
+/// Parses the `mutability` keyword from a schema node.
+pub fn parse_mutability_mode(schema_node: &JsonValue) -> Result<MutabilityMode, SyamlError> {
+    let obj = schema_node.as_object().ok_or_else(|| {
+        SyamlError::MutabilityError("schema node must be an object to have mutability".to_string())
+    })?;
+    let raw = obj.get("mutability").ok_or_else(|| {
+        SyamlError::MutabilityError("no mutability keyword found on schema node".to_string())
+    })?;
+    let s = raw.as_str().ok_or_else(|| {
+        SyamlError::MutabilityError("mutability must be a string".to_string())
+    })?;
+    match s {
+        "frozen" => Ok(MutabilityMode::Frozen),
+        "replace" => Ok(MutabilityMode::Replace),
+        "append_only" => Ok(MutabilityMode::AppendOnly),
+        "map_put_only" => Ok(MutabilityMode::MapPutOnly),
+        "monotone_increase" => Ok(MutabilityMode::MonotoneIncrease),
+        other => Err(SyamlError::MutabilityError(format!(
+            "unknown mutability mode '{}'; expected frozen, replace, append_only, map_put_only, or monotone_increase",
+            other
+        ))),
+    }
+}
+
+/// Validates mutability keyword semantic rules across all schema types.
+pub fn validate_mutability_keywords(schema: &JsonValue, path: &str) -> Result<(), SyamlError> {
+    let Some(obj) = schema.as_object() else {
+        return Ok(());
+    };
+    if let Some(raw) = obj.get("mutability") {
+        let mode = parse_mutability_mode(schema)?;
+        let type_name = obj.get("type").and_then(JsonValue::as_str);
+        match mode {
+            MutabilityMode::AppendOnly => {
+                if type_name != Some("array") {
+                    return Err(SyamlError::MutabilityError(format!(
+                        "mutability 'append_only' at {} requires type: array",
+                        path
+                    )));
+                }
+            }
+            MutabilityMode::MapPutOnly => {
+                if type_name != Some("object") {
+                    return Err(SyamlError::MutabilityError(format!(
+                        "mutability 'map_put_only' at {} requires type: object",
+                        path
+                    )));
+                }
+            }
+            MutabilityMode::MonotoneIncrease => {
+                if !matches!(type_name, Some("integer") | Some("number")) {
+                    return Err(SyamlError::MutabilityError(format!(
+                        "mutability 'monotone_increase' at {} requires type: integer or number",
+                        path
+                    )));
+                }
+            }
+            _ => {}
+        }
+        let _ = raw; // suppress unused warning
+    }
+    // Recurse into properties, items, values
+    if let Some(props) = obj.get("properties").and_then(JsonValue::as_object) {
+        for (k, v) in props {
+            validate_mutability_keywords(v, &format!("{}.properties.{}", path, k))?;
+        }
+    }
+    if let Some(items) = obj.get("items") {
+        validate_mutability_keywords(items, &format!("{}.items", path))?;
+    }
+    if let Some(values) = obj.get("values") {
+        validate_mutability_keywords(values, &format!("{}.values", path))?;
+    }
+    Ok(())
+}
+
+/// Walks a dot-separated data path through type hints + schema to find the effective mutability mode.
+pub fn resolve_mutability_for_path(
+    path: &str,
+    type_hints: &std::collections::BTreeMap<String, String>,
+    schema: &crate::ast::SchemaDoc,
+) -> Result<MutabilityMode, SyamlError> {
+    // First look for direct type hint on this path
+    if let Some(type_name) = type_hints.get(path) {
+        if let Some(schema_node) = schema.types.get(type_name.as_str()) {
+            if schema_node.as_object().and_then(|o| o.get("mutability")).is_some() {
+                return parse_mutability_mode(schema_node);
+            }
+        }
+    }
+    // Walk parent paths: try $.a.b -> $.a -> $
+    let segments: Vec<&str> = path.split('.').collect();
+    for len in (1..segments.len()).rev() {
+        let parent_path: String = segments[..len].join(".");
+        if let Some(type_name) = type_hints.get(&parent_path) {
+            if let Some(schema_node) = schema.types.get(type_name.as_str()) {
+                if schema_node.as_object().and_then(|o| o.get("mutability")).is_some() {
+                    return parse_mutability_mode(schema_node);
+                }
+            }
+        }
+    }
+    Ok(MutabilityMode::Replace) // default: mutable
 }

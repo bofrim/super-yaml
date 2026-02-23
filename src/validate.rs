@@ -520,6 +520,7 @@ pub fn validate_constraints_with_imports(
                 unresolved_paths: &unresolved,
                 current_value: Some(value),
                 current_scope,
+                named_scopes: std::collections::BTreeMap::new(),
             };
 
             let result = evaluate(ast, &ctx).map_err(map_eval_error)?;

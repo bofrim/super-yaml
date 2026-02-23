@@ -990,11 +990,24 @@ pub fn generate_rust_types_and_data_from_path(
     let data_output =
         render_rust_data(&compiled.value, &type_hints, &expanded.types, &type_names);
 
-    if data_output.is_empty() {
+    let functional_output = if let Some(ref func_doc) = parsed.functional {
+        crate::functional::generate_rust_function_stubs(func_doc, &expanded.types)
+    } else {
+        String::new()
+    };
+
+    if data_output.is_empty() && functional_output.is_empty() {
         return Ok(types_output);
     }
 
-    Ok(format!("{types_output}\n// --- Data ---\n\n{data_output}"))
+    let mut result = types_output;
+    if !data_output.is_empty() {
+        result = format!("{result}\n// --- Data ---\n\n{data_output}");
+    }
+    if !functional_output.is_empty() {
+        result = format!("{result}\n{functional_output}");
+    }
+    Ok(result)
 }
 
 fn render_rust_data(

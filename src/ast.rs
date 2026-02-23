@@ -18,6 +18,9 @@ pub struct ParsedDocument {
     pub schema: SchemaDoc,
     /// Parsed data section plus extracted type hints.
     pub data: DataDoc,
+    /// Optional parsed functional section.
+    #[serde(default)]
+    pub functional: Option<FunctionalDoc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,4 +120,102 @@ pub struct DataDoc {
     pub value: JsonValue,
     /// Extracted type hints keyed by normalized JSON path.
     pub type_hints: BTreeMap<String, String>,
+    /// Freeze markers: keys frozen with `^` suffix in source.
+    #[serde(default)]
+    pub freeze_markers: FreezeMarkers,
+}
+
+/// Mutability mode declared on a schema node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MutabilityMode {
+    Frozen,
+    Replace,
+    AppendOnly,
+    MapPutOnly,
+    MonotoneIncrease,
+}
+
+/// Map from normalized JSON path (`$.a.b`) to `true` when that key is frozen.
+pub type FreezeMarkers = BTreeMap<String, bool>;
+
+/// Single parameter definition in a functional function.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParameterDef {
+    /// Type reference as a JSON schema fragment.
+    pub type_ref: serde_json::Value,
+    /// Whether this parameter is mutable.
+    pub mutable: bool,
+}
+
+/// Capability-scoped permission block.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DataPermissions {
+    #[serde(default)]
+    pub read: Vec<String>,
+    #[serde(default)]
+    pub write: Vec<String>,
+}
+
+/// Full permissions block for a function.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionsDef {
+    #[serde(default)]
+    pub file: Option<serde_json::Value>,
+    #[serde(default)]
+    pub network: Option<serde_json::Value>,
+    #[serde(default)]
+    pub env_perms: Option<serde_json::Value>,
+    #[serde(default)]
+    pub process: Option<serde_json::Value>,
+    #[serde(default)]
+    pub data: Option<DataPermissions>,
+}
+
+/// A set of conditions that can be semantic, strict, or both.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConditionSet {
+    /// Human-readable annotation strings (no validation).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic: Vec<String>,
+    /// Evaluatable expression strings (syntax + scope validated at compile time).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strict: Vec<String>,
+}
+
+/// Structured body of a `specification` block.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SpecificationDef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preconditions: Option<ConditionSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postconditions: Option<ConditionSet>,
+    /// Any other specification keys (description, etc.) — pass-through.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Single function definition in the `---functional` section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionDef {
+    /// Named input parameters.
+    pub inputs: BTreeMap<String, ParameterDef>,
+    /// Return type schema (optional).
+    #[serde(default)]
+    pub output: Option<serde_json::Value>,
+    /// Error variants schema (optional).
+    #[serde(default)]
+    pub errors: Option<serde_json::Value>,
+    /// Capability permissions (optional).
+    #[serde(default)]
+    pub permissions: Option<PermissionsDef>,
+    /// Specification block (optional).
+    #[serde(default)]
+    pub specification: Option<SpecificationDef>,
+}
+
+/// Parsed `---functional` section.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FunctionalDoc {
+    pub functions: BTreeMap<String, FunctionDef>,
 }

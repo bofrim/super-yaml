@@ -221,6 +221,7 @@ fn eval_node(
             unresolved_paths: unresolved,
             current_value: None,
             current_scope: None,
+            named_scopes: std::collections::BTreeMap::new(),
         };
         return evaluate(&parsed, &ctx);
     }
@@ -268,6 +269,7 @@ fn evaluate_interpolation(
             unresolved_paths: unresolved,
             current_value: None,
             current_scope: None,
+            named_scopes: std::collections::BTreeMap::new(),
         };
         return evaluate(&parsed, &ctx);
     }
@@ -287,6 +289,7 @@ fn evaluate_interpolation(
             unresolved_paths: unresolved,
             current_value: None,
             current_scope: None,
+            named_scopes: std::collections::BTreeMap::new(),
         };
         let eval = evaluate(&parsed, &ctx)?;
         out.push_str(&json_to_string(&eval));

@@ -38,6 +38,8 @@ pub struct EvalContext<'a> {
     pub current_value: Option<&'a JsonValue>,
     /// Current object scope used for local lookups in constraint expressions.
     pub current_scope: Option<&'a JsonValue>,
+    /// Extra named roots: "input" → input object, "output" → output value, "data" → data snapshot.
+    pub named_scopes: BTreeMap<String, JsonValue>,
 }
 
 /// Evaluates an expression AST node into a JSON value.
@@ -67,6 +69,16 @@ pub fn evaluate(expr: &Expr, ctx: &EvalContext<'_>) -> Result<JsonValue, EvalErr
 fn resolve_var(path: &[String], ctx: &EvalContext<'_>) -> Result<JsonValue, EvalError> {
     if path.is_empty() {
         return Err(SyamlError::ExpressionError("empty variable path".to_string()).into());
+    }
+
+    // Named scopes: input.*, output.*, data.*, etc.
+    if let Some(root) = ctx.named_scopes.get(&path[0]) {
+        if path.len() == 1 {
+            return Ok(root.clone());
+        }
+        return lookup_path(root, &path[1..])
+            .cloned()
+            .ok_or_else(|| EvalError::Unresolved(path.join(".")));
     }
 
     if path[0] == "env" {
