@@ -275,6 +275,73 @@ ServiceConfig:
       type: PositiveNumber
 ```
 
+### Type extension
+
+Object types can inherit fields from a parent type using `ChildType <ParentType>:` syntax. Extension is restricted to object types. All parent fields are implicitly locked — children may only add new fields, never redeclare inherited ones. This guarantees IS-A substitutability: a `ChildType` value is always a valid `ParentType` value.
+
+```yaml
+---schema
+Animal:
+  type: object
+  properties:
+    name: string
+    age: integer
+
+Dog <Animal>:          # Dog IS-A Animal
+  type: object
+  properties:
+    breed: string      # only new fields allowed; cannot redeclare name or age
+```
+
+After expansion, `Dog` is a flat object with `name`, `age`, and `breed`. Anywhere an `Animal` type is expected, a `Dog` value is also accepted.
+
+**Multi-level chains** work as expected: each level only adds new fields.
+
+```yaml
+---schema
+A:
+  type: object
+  properties:
+    a_field: string
+
+B <A>:
+  type: object
+  properties:
+    b_field: integer
+
+C <B>:                 # C inherits a_field (from A) and b_field (from B)
+  type: object
+  properties:
+    c_field: boolean
+```
+
+**Constraint scope**: inherited fields are available in child constraints automatically because expansion happens before constraint collection.
+
+```yaml
+---schema
+Base:
+  type: object
+  properties:
+    min_val: integer
+
+Range <Base>:
+  type: object
+  properties:
+    max_val: integer
+  constraints:
+    - "min_val <= max_val"    # min_val comes from Base
+```
+
+**Error cases**:
+
+| Condition | Error |
+|-----------|-------|
+| `<UnknownParent>` | `"type 'Child' extends unknown type 'UnknownParent'"` |
+| Parent is not `type: object` | `"type 'Child' extends 'Parent' which is not an object type"` |
+| Child is not `type: object` | `"only object types can use extends, but 'Child' is not an object type"` |
+| Child redeclares parent field | `"type 'Child' cannot redeclare field 'field' already defined in 'Parent'"` |
+| Circular chain | `"circular type extension involving: A, B"` |
+
 ### Array types
 
 ```yaml

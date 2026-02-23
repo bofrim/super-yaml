@@ -2146,3 +2146,100 @@ item <Item>:
     // No field_numbers and flag is false — should compile without error.
     compile_document(doc, &no_env()).unwrap();
 }
+
+// ── extends integration tests ────────────────────────────────────────────────
+
+#[test]
+fn extends_full_document_compiles_correctly() {
+    let doc = r#"---!syaml/v0
+---schema
+Animal:
+  type: object
+  properties:
+    name: string
+    age: integer
+"Dog <Animal>":
+  type: object
+  properties:
+    breed: string
+---data
+pet <Dog>:
+  name: Rex
+  age: 3
+  breed: Labrador
+"#;
+    let compiled = compile_document(doc, &no_env()).unwrap();
+    let val = &compiled.value;
+    assert_eq!(val["pet"]["name"], "Rex");
+    assert_eq!(val["pet"]["age"], 3);
+    assert_eq!(val["pet"]["breed"], "Labrador");
+}
+
+#[test]
+fn extends_inherited_fields_appear_in_compiled_output() {
+    let doc = r#"---!syaml/v0
+---schema
+Base:
+  type: object
+  properties:
+    id: string
+"Child <Base>":
+  type: object
+  properties:
+    value: integer
+---data
+item <Child>:
+  id: abc
+  value: 42
+"#;
+    let compiled = compile_document(doc, &no_env()).unwrap();
+    assert_eq!(compiled.value["item"]["id"], "abc");
+    assert_eq!(compiled.value["item"]["value"], 42);
+}
+
+#[test]
+fn extends_constraint_referencing_inherited_field_works() {
+    let doc = r#"---!syaml/v0
+---schema
+Base:
+  type: object
+  properties:
+    min_val: integer
+"Range <Base>":
+  type: object
+  properties:
+    max_val: integer
+  constraints:
+    - "min_val <= max_val"
+---data
+r <Range>:
+  min_val: 10
+  max_val: 20
+"#;
+    compile_document(doc, &no_env()).unwrap();
+}
+
+#[test]
+fn extends_child_missing_parent_field_fails_validation() {
+    let doc = r#"---!syaml/v0
+---schema
+Base:
+  type: object
+  properties:
+    required_field: string
+"Child <Base>":
+  type: object
+  properties:
+    extra: integer
+---data
+item <Child>:
+  extra: 5
+"#;
+    // required_field is required (no optional: true) so should fail
+    let err = compile_document(doc, &no_env()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("required_field"),
+        "expected missing required_field error, got: {msg}"
+    );
+}

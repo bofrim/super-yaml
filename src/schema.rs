@@ -8,7 +8,7 @@
 //! - Array: `items`, `minItems`, `maxItems`
 //! - Version: `since`, `deprecated`, `removed`, `field_number`
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use regex::Regex;
 use serde_json::Value as JsonValue;
@@ -44,10 +44,19 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
         map
     };
 
+    // Pass 1: scan keys, build extends_map, insert types under base names.
     let mut types = BTreeMap::new();
+    let mut extends_map: BTreeMap<String, String> = BTreeMap::new();
     for (k, v) in type_map {
-        types.insert(k.clone(), normalize_schema_node(v.clone()));
+        let (base_name, parent) = split_schema_key_and_parent(k)?;
+        if let Some(p) = parent {
+            extends_map.insert(base_name.clone(), p);
+        }
+        types.insert(base_name, normalize_schema_node(v.clone()));
     }
+
+    // Pass 2: expand extends before collecting constraints.
+    expand_extends_types(&mut types, &extends_map)?;
 
     let mut type_constraints = BTreeMap::new();
     for (type_name, type_schema) in &types {
@@ -70,6 +79,7 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
     Ok(SchemaDoc {
         types,
         type_constraints,
+        extends: extends_map,
     })
 }
 
@@ -81,9 +91,19 @@ pub fn parse_schema(value: &JsonValue) -> Result<SchemaDoc, SyamlError> {
 pub fn validate_schema_type_references(
     types: &BTreeMap<String, JsonValue>,
 ) -> Result<(), SyamlError> {
+    validate_schema_type_references_with_extends(types, &BTreeMap::new())
+}
+
+/// Like [`validate_schema_type_references`] but also accepts an `extends_map`
+/// so that child types are treated as valid substitutes for their parent types
+/// (IS-A relationship).
+pub fn validate_schema_type_references_with_extends(
+    types: &BTreeMap<String, JsonValue>,
+    extends_map: &BTreeMap<String, String>,
+) -> Result<(), SyamlError> {
     for (type_name, schema) in types {
         let root_path = format!("schema.{}", type_name);
-        validate_schema_type_references_inner(schema, types, &root_path)?;
+        validate_schema_type_references_inner(schema, types, extends_map, &root_path)?;
     }
     Ok(())
 }
@@ -91,6 +111,7 @@ pub fn validate_schema_type_references(
 fn validate_schema_type_references_inner(
     schema: &JsonValue,
     types: &BTreeMap<String, JsonValue>,
+    extends_map: &BTreeMap<String, String>,
     path: &str,
 ) -> Result<(), SyamlError> {
     match schema {
@@ -107,22 +128,272 @@ fn validate_schema_type_references_inner(
                     if type_name != "union"
                         && !is_builtin_type_name(type_name)
                         && !types.contains_key(type_name)
+                        && !is_descendant_of_any(type_name, types, extends_map)
                     {
                         return Err(SyamlError::SchemaError(format!(
                             "unknown type reference at {child_path}: '{type_name}' not found in schema"
                         )));
                     }
                 }
-                validate_schema_type_references_inner(child, types, &child_path)?;
+                validate_schema_type_references_inner(child, types, extends_map, &child_path)?;
             }
         }
         JsonValue::Array(items) => {
             for (index, item) in items.iter().enumerate() {
                 let item_path = format!("{path}[{index}]");
-                validate_schema_type_references_inner(item, types, &item_path)?;
+                validate_schema_type_references_inner(item, types, extends_map, &item_path)?;
             }
         }
         _ => {}
+    }
+
+    Ok(())
+}
+
+/// Returns true if `type_name` is a defined type or a descendant of any defined type.
+fn is_descendant_of_any(
+    type_name: &str,
+    types: &BTreeMap<String, JsonValue>,
+    extends_map: &BTreeMap<String, String>,
+) -> bool {
+    // Walk the extends chain upward; if we reach a known type, it's valid.
+    let mut current = type_name;
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current) {
+            return false; // cycle guard
+        }
+        if types.contains_key(current) {
+            return true;
+        }
+        match extends_map.get(current) {
+            Some(parent) => current = parent.as_str(),
+            None => return false,
+        }
+    }
+}
+
+/// Splits a schema key like `ChildType <ParentType>` into `("ChildType", Some("ParentType"))`.
+/// Keys without angle brackets return `(key, None)`.
+fn split_schema_key_and_parent(key: &str) -> Result<(String, Option<String>), SyamlError> {
+    let trimmed = key.trim();
+    if !trimmed.ends_with('>') {
+        return Ok((trimmed.to_string(), None));
+    }
+
+    let lt = match trimmed.rfind('<') {
+        Some(i) => i,
+        None => return Ok((trimmed.to_string(), None)),
+    };
+
+    if lt == 0 || lt + 1 >= trimmed.len() {
+        return Ok((trimmed.to_string(), None));
+    }
+
+    let base = trimmed[..lt].trim_end();
+    let parent = trimmed[lt + 1..trimmed.len() - 1].trim();
+
+    if base.is_empty() {
+        return Err(SyamlError::SchemaError(format!(
+            "invalid extends syntax '{}': missing type name",
+            key
+        )));
+    }
+    if parent.is_empty() {
+        return Err(SyamlError::SchemaError(format!(
+            "invalid extends syntax '{}': missing parent type name",
+            key
+        )));
+    }
+
+    Ok((base.to_string(), Some(parent.to_string())))
+}
+
+/// Expands all child types in `types` by merging parent properties into them.
+///
+/// Expansion is done in topological order so that multi-level chains (A → B → C)
+/// are handled correctly. After expansion each child is a standalone flat object
+/// with all ancestor properties included.
+fn expand_extends_types(
+    types: &mut BTreeMap<String, JsonValue>,
+    extends_map: &BTreeMap<String, String>,
+) -> Result<(), SyamlError> {
+    if extends_map.is_empty() {
+        return Ok(());
+    }
+
+    // Validate that every parent exists.
+    for (child, parent) in extends_map {
+        if !types.contains_key(parent) {
+            return Err(SyamlError::SchemaError(format!(
+                "type '{}' extends unknown type '{}'",
+                child, parent
+            )));
+        }
+    }
+
+    // Topological sort (Kahn's algorithm).
+    // `degree[child]` = number of ancestors of `child` that are themselves children.
+    let mut degree: BTreeMap<String, usize> = extends_map.keys().map(|k| (k.clone(), 0)).collect();
+    for (child, parent) in extends_map {
+        if degree.contains_key(parent.as_str()) {
+            *degree.get_mut(child.as_str()).unwrap() += 1;
+        }
+    }
+
+    let mut queue: VecDeque<String> = degree
+        .iter()
+        .filter(|(_, &d)| d == 0)
+        .map(|(k, _)| k.clone())
+        .collect();
+    let mut order: Vec<String> = Vec::new();
+
+    while let Some(node) = queue.pop_front() {
+        order.push(node.clone());
+        // Find all nodes whose parent is `node`.
+        for (child, parent) in extends_map {
+            if parent == &node {
+                let d = degree.get_mut(child.as_str()).unwrap();
+                *d -= 1;
+                if *d == 0 {
+                    queue.push_back(child.clone());
+                }
+            }
+        }
+    }
+
+    if order.len() != degree.len() {
+        // Cycle detected — collect involved type names.
+        let cycle_nodes: Vec<String> = degree
+            .into_keys()
+            .filter(|k| !order.contains(k))
+            .collect();
+        let mut sorted = cycle_nodes;
+        sorted.sort();
+        return Err(SyamlError::SchemaError(format!(
+            "circular type extension involving: {}",
+            sorted.join(", ")
+        )));
+    }
+
+    // Expand in topological order.
+    for child_name in &order {
+        let parent_name = &extends_map[child_name];
+
+        // Clone parent schema before borrowing child mutably.
+        let parent_schema = types[parent_name].clone();
+        let child_schema = types[child_name].clone();
+
+        let parent_obj = parent_schema.as_object().ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "type '{}' extends '{}' which is not an object type",
+                child_name, parent_name
+            ))
+        })?;
+        if parent_obj.get("type").and_then(JsonValue::as_str) != Some("object") {
+            return Err(SyamlError::SchemaError(format!(
+                "type '{}' extends '{}' which is not an object type",
+                child_name, parent_name
+            )));
+        }
+
+        let child_obj = child_schema.as_object().ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "only object types can use extends, but '{}' is not an object type",
+                child_name
+            ))
+        })?;
+        if child_obj.get("type").and_then(JsonValue::as_str) != Some("object") {
+            return Err(SyamlError::SchemaError(format!(
+                "only object types can use extends, but '{}' is not an object type",
+                child_name
+            )));
+        }
+
+        let parent_props = parent_obj
+            .get("properties")
+            .and_then(JsonValue::as_object)
+            .cloned()
+            .unwrap_or_default();
+
+        let child_props = child_obj
+            .get("properties")
+            .and_then(JsonValue::as_object)
+            .cloned()
+            .unwrap_or_default();
+
+        // Forbid redeclaration of parent fields.
+        for field in child_props.keys() {
+            if parent_props.contains_key(field.as_str()) {
+                return Err(SyamlError::SchemaError(format!(
+                    "type '{}' cannot redeclare field '{}' already defined in '{}'",
+                    child_name, field, parent_name
+                )));
+            }
+        }
+
+        // Merge: parent properties first, then child properties.
+        let mut merged_props = parent_props;
+        merged_props.extend(child_props);
+
+        // Merge `required` arrays (union, deduplicated).
+        let parent_required: Vec<String> = parent_obj
+            .get("required")
+            .and_then(JsonValue::as_array)
+            .map(|a| a.iter().filter_map(JsonValue::as_str).map(String::from).collect())
+            .unwrap_or_default();
+        let child_required: Vec<String> = child_obj
+            .get("required")
+            .and_then(JsonValue::as_array)
+            .map(|a| a.iter().filter_map(JsonValue::as_str).map(String::from).collect())
+            .unwrap_or_default();
+        let mut merged_required: Vec<String> = parent_required;
+        for r in child_required {
+            if !merged_required.contains(&r) {
+                merged_required.push(r);
+            }
+        }
+
+        // Merge `constraints` (parent first, then child).
+        let parent_constraints: Vec<JsonValue> = parent_obj
+            .get("constraints")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let child_constraints: Vec<JsonValue> = child_obj
+            .get("constraints")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let merged_constraints: Vec<JsonValue> = parent_constraints
+            .into_iter()
+            .chain(child_constraints)
+            .collect();
+
+        // Build the expanded child schema.
+        let mut expanded = serde_json::Map::new();
+        expanded.insert("type".to_string(), JsonValue::String("object".to_string()));
+        if !merged_props.is_empty() {
+            expanded.insert("properties".to_string(), JsonValue::Object(merged_props));
+        }
+        if !merged_required.is_empty() {
+            expanded.insert(
+                "required".to_string(),
+                JsonValue::Array(merged_required.into_iter().map(JsonValue::String).collect()),
+            );
+        }
+        if !merged_constraints.is_empty() {
+            expanded.insert("constraints".to_string(), JsonValue::Array(merged_constraints));
+        }
+        // Copy over any other child-level keys (mutability, constructors, etc.) excluding
+        // keys we've already handled.
+        for (k, v) in child_obj {
+            if !matches!(k.as_str(), "type" | "properties" | "required" | "constraints") {
+                expanded.insert(k.clone(), v.clone());
+            }
+        }
+
+        types.insert(child_name.clone(), JsonValue::Object(expanded));
     }
 
     Ok(())
@@ -1923,5 +2194,196 @@ mod tests {
             "expected no constraints, got {:?}",
             doc.type_constraints
         );
+    }
+
+    // ── extends tests ─────────────────────────────────────────────────────────
+
+    fn parse_err(schema_json: serde_json::Value) -> String {
+        parse_schema(&schema_json).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn extends_basic_child_gets_parent_fields() {
+        let schema = json!({
+            "Animal": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "age": { "type": "integer" }
+                }
+            },
+            "Dog <Animal>": {
+                "type": "object",
+                "properties": {
+                    "breed": { "type": "string" }
+                }
+            }
+        });
+        let doc = parse(schema);
+        let dog = doc.types.get("Dog").unwrap().as_object().unwrap().clone();
+        let props = dog["properties"].as_object().unwrap();
+        assert!(props.contains_key("name"), "should inherit 'name'");
+        assert!(props.contains_key("age"), "should inherit 'age'");
+        assert!(props.contains_key("breed"), "should have own 'breed'");
+        assert!(doc.extends.contains_key("Dog"));
+        assert_eq!(doc.extends["Dog"], "Animal");
+    }
+
+    #[test]
+    fn extends_child_adds_new_field_no_error() {
+        let schema = json!({
+            "Base": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } }
+            },
+            "Extended <Base>": {
+                "type": "object",
+                "properties": { "extra": { "type": "integer" } }
+            }
+        });
+        let doc = parse(schema);
+        let ext = doc.types.get("Extended").unwrap().as_object().unwrap().clone();
+        let props = ext["properties"].as_object().unwrap();
+        assert!(props.contains_key("id"));
+        assert!(props.contains_key("extra"));
+    }
+
+    #[test]
+    fn extends_child_redeclares_parent_field_errors() {
+        let schema = json!({
+            "Base": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } }
+            },
+            "Child <Base>": {
+                "type": "object",
+                "properties": { "id": { "type": "integer" } }
+            }
+        });
+        let err = parse_err(schema);
+        assert!(
+            err.contains("cannot redeclare field 'id'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extends_unknown_parent_errors() {
+        let schema = json!({
+            "Child <NoSuchType>": {
+                "type": "object",
+                "properties": { "x": { "type": "string" } }
+            }
+        });
+        let err = parse_err(schema);
+        assert!(
+            err.contains("extends unknown type 'NoSuchType'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extends_non_object_parent_errors() {
+        let schema = json!({
+            "MyStr": { "type": "string" },
+            "Child <MyStr>": {
+                "type": "object",
+                "properties": { "x": { "type": "string" } }
+            }
+        });
+        let err = parse_err(schema);
+        assert!(
+            err.contains("not an object type"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extends_non_object_child_errors() {
+        let schema = json!({
+            "Base": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } }
+            },
+            "Child <Base>": { "type": "string" }
+        });
+        let err = parse_err(schema);
+        assert!(
+            err.contains("not an object type"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extends_circular_errors() {
+        let schema = json!({
+            "A <B>": {
+                "type": "object",
+                "properties": { "a": { "type": "string" } }
+            },
+            "B <A>": {
+                "type": "object",
+                "properties": { "b": { "type": "string" } }
+            }
+        });
+        let err = parse_err(schema);
+        assert!(
+            err.contains("circular type extension"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extends_multilevel_chain() {
+        let schema = json!({
+            "A": {
+                "type": "object",
+                "properties": { "a_field": { "type": "string" } }
+            },
+            "B <A>": {
+                "type": "object",
+                "properties": { "b_field": { "type": "integer" } }
+            },
+            "C <B>": {
+                "type": "object",
+                "properties": { "c_field": { "type": "boolean" } }
+            }
+        });
+        let doc = parse(schema);
+        let c = doc.types.get("C").unwrap().as_object().unwrap().clone();
+        let props = c["properties"].as_object().unwrap();
+        assert!(props.contains_key("a_field"), "C should inherit a_field from A");
+        assert!(props.contains_key("b_field"), "C should inherit b_field from B");
+        assert!(props.contains_key("c_field"), "C should have own c_field");
+    }
+
+    #[test]
+    fn extends_required_merged() {
+        let schema = json!({
+            "Base": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                },
+                "required": ["id"]
+            },
+            "Child <Base>": {
+                "type": "object",
+                "properties": {
+                    "extra": { "type": "string" }
+                },
+                "required": ["extra"]
+            }
+        });
+        let doc = parse(schema);
+        let child = doc.types.get("Child").unwrap().as_object().unwrap().clone();
+        let required: Vec<&str> = child["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"id"), "should inherit required 'id'");
+        assert!(required.contains(&"extra"), "should keep required 'extra'");
     }
 }

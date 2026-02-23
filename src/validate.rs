@@ -82,6 +82,11 @@ fn are_equivalent_type_names(
         return Ok(true);
     }
 
+    // IS-A check: hinted_type is a descendant of expected_type via extends.
+    if is_descendant_of(hinted_type, expected_type, &schema.extends) {
+        return Ok(true);
+    }
+
     if !is_namespaced_suffix_match(expected_type, hinted_type) {
         return Ok(false);
     }
@@ -92,6 +97,31 @@ fn are_equivalent_type_names(
         normalize_schema_type_references_for_comparison(schema, &expected_schema)
             == normalize_schema_type_references_for_comparison(schema, &hinted_schema),
     )
+}
+
+/// Returns true if `child` is a direct or transitive descendant of `ancestor`
+/// in the extends chain.
+fn is_descendant_of(
+    child: &str,
+    ancestor: &str,
+    extends_map: &BTreeMap<String, String>,
+) -> bool {
+    let mut current = child;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current) {
+            return false;
+        }
+        match extends_map.get(current) {
+            Some(parent) => {
+                if parent == ancestor {
+                    return true;
+                }
+                current = parent.as_str();
+            }
+            None => return false,
+        }
+    }
 }
 
 fn is_namespaced_suffix_match(left: &str, right: &str) -> bool {

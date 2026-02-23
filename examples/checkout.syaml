@@ -2,7 +2,7 @@
 
 ---meta
 imports:
-  inv: "@payments/invoice"
+  inv: @payments/invoice
 
 ---schema
 CheckoutConfig:

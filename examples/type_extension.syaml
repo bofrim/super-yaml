@@ -1,0 +1,85 @@
+---!syaml/v0
+---schema
+# Demonstrates type extension: ChildType <ParentType> syntax.
+# All parent fields are inherited and locked; children add new fields only.
+# IS-A semantics: a child value is valid anywhere the parent type is expected.
+
+# Base event type — every event carries an id, unix timestamp, and severity.
+Event:
+  type: object
+  properties:
+    id: string
+    timestamp: integer
+    severity: [info, warning, critical]
+  constraints:
+    - "len(id) >= 1"
+    - "timestamp >= 0"
+
+# AlertEvent IS-A Event: inherits id/timestamp/severity, adds alert_code and message.
+AlertEvent <Event>:
+  type: object
+  properties:
+    alert_code: integer
+    message: string
+  constraints:
+    - "alert_code >= 1000"
+
+# MetricEvent IS-A Event: inherits id/timestamp/severity, adds metric_name and value.
+MetricEvent <Event>:
+  type: object
+  properties:
+    metric_name: string
+    value: number
+
+# DeadlineAlert IS-A AlertEvent (multi-level): inherits all Event + AlertEvent fields,
+# adds deadline_timestamp with a constraint that it must be after the event timestamp.
+DeadlineAlert <AlertEvent>:
+  type: object
+  properties:
+    deadline_timestamp: integer
+  constraints:
+    - "deadline_timestamp > timestamp"
+
+# Typed dictionary whose values are Events. Because AlertEvent, MetricEvent, and
+# DeadlineAlert are all IS-A Event, they can each appear as entries in this dict.
+EventLog:
+  type: object
+  values:
+    type: Event
+
+---data
+
+# Each entry carries its own type hint so its full schema is validated,
+# while the EventLog values schema confirms every entry is a valid Event.
+event_log <EventLog>:
+
+  # Plain base event — no extension.
+  system_start <Event>:
+    id: evt-000
+    timestamp: 1740211200
+    severity: info
+
+  # AlertEvent — extends Event with alert_code and message.
+  login_failure <AlertEvent>:
+    id: evt-001
+    timestamp: 1740211260
+    severity: warning
+    alert_code: 1042
+    message: "authentication failed for user admin"
+
+  # MetricEvent — parallel extension of Event.
+  cpu_usage <MetricEvent>:
+    id: evt-002
+    timestamp: 1740211320
+    severity: info
+    metric_name: cpu_percent
+    value: 73.5
+
+  # DeadlineAlert — three-level chain: DeadlineAlert -> AlertEvent -> Event.
+  disk_full <DeadlineAlert>:
+    id: evt-003
+    timestamp: 1740211380
+    severity: critical
+    alert_code: 2001
+    message: "disk usage exceeded 95%"
+    deadline_timestamp: 1740213180
