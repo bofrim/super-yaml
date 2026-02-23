@@ -6,15 +6,36 @@ imports:
     sections: [schema]
 ---data
 _examples:
-  ts <t.UnixTimestamp>: 1708704000
-  ms <t.UnixMillis>: 1708704000000
-  date <t.IsoDate>: 2024-02-23
-  datetime <t.IsoDateTime>: 2024-02-23T12:00:00Z
-  datetime_tz <t.IsoDateTime>: 2024-02-23T12:00:00+05:30
-  dur_sec <t.DurationSeconds>: 3600
-  dur_ms <t.DurationMillis>: 86400000
-  dow <t.DayOfWeek>: monday
-  month <t.Month>: february
-  range <t.TimeRange>:
-    start: 1708704000
-    end: 1708790400
+  day_of_week <t.DaysOfWeek>: monday
+  month <t.Months>: march
+  time_unit <t.TimeUnits>: hours
+  time_direction <t.TimeDirections>: past
+  timezone <t.Timezone>:
+    locale: America/New_York
+    abbreviation: EST
+    offset: -05:00
+  date <t.IsoDate>: 2024-03-15
+  time <t.IsoTime>: 14:30:00
+  datetime <t.IsoDateTime>: 2024-03-15T14:30:00Z
+  duration <t.Duration>:
+    days: 0
+    hours: 2
+    minutes: 30
+    seconds: 0
+  time_range <t.TimeRange>:
+    start: 09:00:00
+    end: 17:00:00
+  timestamp <t.Timestamp>:
+    datetime: 2024-03-15T14:30:00Z
+    timezone:
+      locale: UTC
+      abbreviation: UTC
+      offset: +00:00
+  relative_past <t.RelativeTime>:
+    unit: days
+    amount: 7
+    direction: past
+  relative_future <t.RelativeTime>:
+    unit: hours
+    amount: 24
+    direction: future

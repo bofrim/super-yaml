@@ -3,37 +3,19 @@
 ---module
 name: time
 version: "1.0.0"
-description: "Temporal types for timestamps, durations, and calendar values"
+description: "Time-related types for dates, durations, timezones, and schedules"
 metadata:
   owner: library
   schema_version: "1.0.0"
 
+---meta
+imports:
+  prim:
+    path: ../primitives/module.syaml
+    sections: [schema]
+
 ---schema
-UnixTimestamp:
-  type: integer
-  minimum: 0
-
-UnixMillis:
-  type: integer
-  minimum: 0
-
-IsoDate:
-  type: string
-  pattern: '^\d{4}-\d{2}-\d{2}$'
-
-IsoDateTime:
-  type: string
-  pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
-
-DurationSeconds:
-  type: integer
-  minimum: 0
-
-DurationMillis:
-  type: integer
-  minimum: 0
-
-DayOfWeek:
+DaysOfWeek:
   - monday
   - tuesday
   - wednesday
@@ -42,7 +24,7 @@ DayOfWeek:
   - saturday
   - sunday
 
-Month:
+Months:
   - january
   - february
   - march
@@ -56,10 +38,102 @@ Month:
   - november
   - december
 
+TimeUnits:
+  - seconds
+  - minutes
+  - hours
+  - days
+  - weeks
+  - months
+  - years
+
+TimeDirections:
+  - past
+  - future
+
+Timezones:
+  - America/New_York
+  - America/Los_Angeles
+  - Europe/London
+  - UTC
+
+Timezone:
+  type: object
+  properties:
+    locale: Timezones
+    abbreviation: string
+    offset: string
+
+IsoDate:
+  type: string
+  pattern: '^\d{4}-\d{2}-\d{2}$'
+
+IsoTime:
+  type: string
+  pattern: '^\d{2}:\d{2}:\d{2}(\.\d{1,6})?$'
+
+IsoDateTime:
+  type: string
+  pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})?$'
+
+Duration:
+  type: object
+  properties:
+    days:
+      type: prim.NonNegativeInteger
+      default: 0
+    hours:
+      type: prim.NonNegativeInteger
+      default: 0
+    minutes:
+      type: prim.NonNegativeInteger
+      default: 0
+    seconds:
+      type: prim.NonNegativeInteger
+      default: 0
+  constraints:
+    - "days + hours + minutes + seconds > 0"
+
 TimeRange:
   type: object
   properties:
-    start: UnixTimestamp
-    end: UnixTimestamp
+    start: IsoTime
+    end: IsoTime
   constraints:
-    - "end >= start"
+    - "end > start"
+
+DateRange:
+  type: object
+  properties:
+    start_date: IsoDate
+    end_date: IsoDate
+  constraints:
+    - "end_date >= start_date"
+
+Schedule:
+  type: object
+  properties:
+    timezone: Timezone
+    days_of_week:
+      type: array
+      items: DaysOfWeek
+      minItems: 1
+      uniqueItems: true
+    time_ranges:
+      type: array
+      items: TimeRange
+      minItems: 1
+
+Timestamp:
+  type: object
+  properties:
+    datetime: IsoDateTime
+    timezone: Timezone
+
+RelativeTime:
+  type: object
+  properties:
+    unit: TimeUnits
+    amount:
+      type: prim.PositiveInteger
+    direction: TimeDirections
