@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -201,6 +202,19 @@ export function activate(context: vscode.ExtensionContext): void {
       validator.schedule(evt.document, "change")
     )
   );
+  // Invalidate the registry cache whenever syaml.syaml is saved.
+  const registryWatcher = vscode.workspace.createFileSystemWatcher("**/syaml.syaml");
+  context.subscriptions.push(registryWatcher);
+  context.subscriptions.push(
+    registryWatcher.onDidChange((uri) => registryCache.delete(uri.fsPath))
+  );
+  context.subscriptions.push(
+    registryWatcher.onDidCreate((uri) => registryCache.delete(uri.fsPath))
+  );
+  context.subscriptions.push(
+    registryWatcher.onDidDelete((uri) => registryCache.delete(uri.fsPath))
+  );
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((evt) => {
       if (!evt.affectsConfiguration("syaml")) {
@@ -516,6 +530,15 @@ interface ImportNamespace {
   aliasRange: vscode.Range;
   importPathRange?: vscode.Range;
   importUri?: vscode.Uri;
+  /** For `@module/file` imports: each segment mapped to its range and resolved URI. */
+  modulePathSegments?: ModulePathSegment[];
+}
+
+/** One clickable segment of an `@module/file` import path. */
+interface ModulePathSegment {
+  text: string;
+  range: vscode.Range;
+  uri?: vscode.Uri;
 }
 
 class SyamlTypeDefinitionProvider implements vscode.DefinitionProvider {
@@ -1717,13 +1740,26 @@ function findImportPathReferenceAtPosition(
   importNamespaces: Map<string, ImportNamespace>
 ): vscode.Location | undefined {
   for (const importNamespace of importNamespaces.values()) {
-    if (!importNamespace.importPathRange || !importNamespace.importUri) {
+    if (!importNamespace.importPathRange) {
       continue;
     }
     if (!importNamespace.importPathRange.contains(position)) {
       continue;
     }
 
+    // For @module/file paths, navigate to whichever segment the cursor is on.
+    if (importNamespace.modulePathSegments) {
+      for (const segment of importNamespace.modulePathSegments) {
+        if (segment.range.contains(position) && segment.uri) {
+          return new vscode.Location(segment.uri, new vscode.Position(0, 0));
+        }
+      }
+      // Cursor is on @ or a "/" separator — fall through to whole-file navigation.
+    }
+
+    if (!importNamespace.importUri) {
+      continue;
+    }
     return new vscode.Location(importNamespace.importUri, new vscode.Position(0, 0));
   }
 
@@ -2894,11 +2930,23 @@ function collectImportNamespaces(document: vscode.TextDocument): Map<string, Imp
       metaBounds.endLine
     );
 
+    const importPath = parsedImportPath?.value;
+    const importUri = resolveImportPathUri(document, importPath);
+    const modulePathSegments =
+      importPath?.startsWith("@") && parsedImportPath?.range
+        ? resolveModuleImportSegments(
+            document.uri.fsPath,
+            importPath,
+            parsedImportPath.range
+          )
+        : undefined;
+
     namespaces.set(alias, {
       alias,
       aliasRange,
       importPathRange: parsedImportPath?.range,
-      importUri: resolveImportPathUri(document, parsedImportPath?.value)
+      importUri,
+      modulePathSegments,
     });
   }
 
@@ -3013,10 +3061,212 @@ function resolveImportPathUri(
     return undefined;
   }
 
+  if (importPath.startsWith("@")) {
+    return resolveAtModuleUri(document.uri.fsPath, importPath);
+  }
+
   const resolvedPath = path.isAbsolute(importPath)
     ? importPath
     : path.resolve(path.dirname(document.uri.fsPath), importPath);
   return vscode.Uri.file(resolvedPath);
+}
+
+/**
+ * Resolves an `@module` or `@module/file` import to a file URI using the
+ * nearest `syaml.syaml` registry.
+ */
+function resolveAtModuleUri(
+  documentFsPath: string,
+  atPath: string
+): vscode.Uri | undefined {
+  const registry = loadRegistryForDocument(documentFsPath);
+  if (!registry) {
+    return undefined;
+  }
+
+  const withoutAt = atPath.slice(1);
+  const slashIdx = withoutAt.indexOf("/");
+  const moduleName = slashIdx >= 0 ? withoutAt.slice(0, slashIdx) : withoutAt;
+  const subPath = slashIdx >= 0 ? withoutAt.slice(slashIdx + 1) : undefined;
+
+  const moduleDir = registry.get(moduleName);
+  if (!moduleDir) {
+    return undefined;
+  }
+
+  if (subPath) {
+    const fileName = subPath.endsWith(".syaml") ? subPath : `${subPath}.syaml`;
+    return vscode.Uri.file(path.join(moduleDir, fileName));
+  }
+  return vscode.Uri.file(path.join(moduleDir, "module.syaml"));
+}
+
+/**
+ * Computes per-segment navigation targets for an `@module/file` import string.
+ *
+ * For `@payments/invoice` the result is two segments:
+ *   - `payments` → `payments/module.syaml`
+ *   - `invoice`  → `payments/invoice.syaml`
+ */
+function resolveModuleImportSegments(
+  documentFsPath: string,
+  importPath: string,
+  pathRange: vscode.Range
+): ModulePathSegment[] | undefined {
+  if (!importPath.startsWith("@")) {
+    return undefined;
+  }
+
+  const registry = loadRegistryForDocument(documentFsPath);
+  if (!registry) {
+    return undefined;
+  }
+
+  const withoutAt = importPath.slice(1); // strip leading @
+  const parts = withoutAt.split("/");
+  const moduleName = parts[0];
+  const moduleDir = registry.get(moduleName);
+
+  const segments: ModulePathSegment[] = [];
+  const baseLine = pathRange.start.line;
+  let charOffset = pathRange.start.character + 1; // +1 to skip @
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const segRange = new vscode.Range(baseLine, charOffset, baseLine, charOffset + part.length);
+
+    let uri: vscode.Uri | undefined;
+    if (moduleDir) {
+      if (i === 0) {
+        // Module name → module.syaml
+        uri = vscode.Uri.file(path.join(moduleDir, "module.syaml"));
+      } else {
+        // File segment → resolved file within the module
+        const fileName = part.endsWith(".syaml") ? part : `${part}.syaml`;
+        uri = vscode.Uri.file(path.join(moduleDir, fileName));
+      }
+    }
+
+    segments.push({ text: part, range: segRange, uri });
+    charOffset += part.length + 1; // +1 for the "/" separator
+  }
+
+  return segments;
+}
+
+/**
+ * Walks up from the document's directory looking for `syaml.syaml`.
+ * Stops at a directory containing `.git` if no registry is found first.
+ */
+function findProjectRegistryPath(startDir: string): string | undefined {
+  let current = startDir;
+  while (true) {
+    const candidate = path.join(current, "syaml.syaml");
+    if (fsSync.existsSync(candidate)) {
+      return candidate;
+    }
+    if (fsSync.existsSync(path.join(current, ".git"))) {
+      return undefined;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+}
+
+/**
+ * Reads and parses a `syaml.syaml` registry file, returning a map from
+ * module name to absolute directory path.
+ */
+function parseModuleRegistry(registryPath: string): Map<string, string> | undefined {
+  let content: string;
+  try {
+    content = fsSync.readFileSync(registryPath, "utf8");
+  } catch {
+    return undefined;
+  }
+
+  const registryDir = path.dirname(registryPath);
+  const result = new Map<string, string>();
+  const lines = content.split("\n");
+
+  let inData = false;
+  let inModules = false;
+  let dataIndent = -1;
+  let modulesIndent = -1;
+
+  for (const line of lines) {
+    if (line.trim() === "---data") {
+      inData = true;
+      inModules = false;
+      dataIndent = -1;
+      modulesIndent = -1;
+      continue;
+    }
+    if (line.trim().startsWith("---") && line.trim() !== "---data") {
+      inData = false;
+      inModules = false;
+      continue;
+    }
+    if (!inData) {
+      continue;
+    }
+
+    if (line.trim().length === 0) {
+      continue;
+    }
+
+    const indent = line.length - line.trimStart().length;
+
+    if (!inModules) {
+      const modulesMatch = /^(\s*)modules\s*:/.exec(line);
+      if (modulesMatch) {
+        inModules = true;
+        dataIndent = indent;
+        continue;
+      }
+    } else {
+      // Stop if we've de-dented back to the data level
+      if (indent <= dataIndent) {
+        break;
+      }
+      if (modulesIndent < 0) {
+        modulesIndent = indent;
+      }
+      if (indent !== modulesIndent) {
+        continue;
+      }
+
+      const entryMatch = /^(\s*)([A-Za-z_][\w]*)\s*:\s*["']?(.+?)["']?\s*$/.exec(line);
+      if (entryMatch) {
+        const name = entryMatch[2];
+        const relPath = entryMatch[3];
+        result.set(name, path.resolve(registryDir, relPath));
+      }
+    }
+  }
+
+  return result;
+}
+
+/** Cached registry loads keyed by registry file path. */
+const registryCache = new Map<string, Map<string, string>>();
+
+function loadRegistryForDocument(documentFsPath: string): Map<string, string> | undefined {
+  const registryPath = findProjectRegistryPath(path.dirname(documentFsPath));
+  if (!registryPath) {
+    return undefined;
+  }
+  if (registryCache.has(registryPath)) {
+    return registryCache.get(registryPath);
+  }
+  const registry = parseModuleRegistry(registryPath);
+  if (registry) {
+    registryCache.set(registryPath, registry);
+  }
+  return registry;
 }
 
 function findSectionBounds(
