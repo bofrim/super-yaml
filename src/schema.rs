@@ -1003,7 +1003,17 @@ fn validate_constraint_operations(
             // Recursively validate inner expression
             validate_constraint_operations(inner, scope_schema, expression, type_name, constraint_path, types)?;
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { name, args } => {
+            // Handle known functions that return specific types
+            match name.as_str() {
+                "len" => {
+                    // len() returns a number - this is valid for comparisons
+                }
+                _ => {
+                    // Unknown function - could return any type
+                }
+            }
+
             // Validate arguments
             for arg in args {
                 validate_constraint_operations(arg, scope_schema, expression, type_name, constraint_path, types)?;
@@ -1074,6 +1084,14 @@ fn infer_expression_type(
                     // Logical operations result in booleans
                     Some("boolean".to_string())
                 }
+            }
+        }
+        Expr::Call { name, .. } => {
+            // Handle known functions that return specific types
+            match name.as_str() {
+                "len" => Some("number".to_string()), // len() returns a number
+                "min" | "max" => Some("number".to_string()), // min/max return numbers
+                _ => None, // Unknown function return type
             }
         }
         Expr::Number(_) => Some("number".to_string()),
