@@ -53,13 +53,16 @@ Every `.syaml` file has this structure:
 
 ---data
 # Configuration values (optional section)
+
+---functional
+# Function declarations with typed inputs, outputs, permissions, and contracts (optional section)
 ```
 
 ### Rules
 
 1. The first non-empty line **must** be exactly `---!syaml/v0`.
-2. Sections are opened with `---meta`, `---schema`, or `---data`.
-3. All three sections are optional. They can appear in any order. Each section can appear at most once.
+2. Sections are opened with `---meta`, `---schema`, `---data`, or `---functional`.
+3. All four sections are optional. They can appear in any order. Each section can appear at most once.
 4. When omitted, `schema` and `data` default to empty objects.
 
 ### Minimal valid document
@@ -86,6 +89,18 @@ file:
   owner: platform-team
   service: billing
   revision: 7
+```
+
+Two reserved keys have compiler-level meaning when versioned fields are in use:
+
+- `schema_version` — a semver string declaring the active schema version of this document. Used to validate `since` / `deprecated` / `removed` field lifecycle annotations on properties.
+- `strict_field_numbers` — when `true`, the compiler enforces that every property `field_number` within a type is unique and non-zero.
+
+```yaml
+---meta
+file:
+  schema_version: "2.1.0"
+  strict_field_numbers: true
 ```
 
 ### `meta.env` — Environment variable bindings
@@ -272,6 +287,84 @@ RuleList:
   maxItems: 100
 ```
 
+### Union types
+
+A union type (analogous to JSON Schema's `oneOf`) accepts a value that matches exactly one of several variants. There are three forms.
+
+#### Tagged dispatch (map form)
+
+Use `tag` to name the discriminator field. At runtime the value of that field is looked up in `options` to select the variant. Set `tag_required: true` to require the tag field to be present.
+
+```yaml
+---schema
+ErrorDetail:
+  type: object
+  properties:
+    code: integer
+    message: string
+
+SuccessPayload:
+  type: object
+  properties:
+    id: string
+    created: boolean
+
+ApiResponse:
+  type: union
+  tag: status
+  tag_required: true
+  options:
+    ok:
+      type: object
+      properties:
+        status: string
+        data: SuccessPayload
+    error:
+      type: object
+      properties:
+        status: string
+        error: ErrorDetail
+```
+
+#### Ordered matching (list form)
+
+Variants are tried in order; the first match wins. No discriminator field is required.
+
+```yaml
+---schema
+FlexibleInput:
+  type: union
+  options:
+    - string
+    - type: object
+      properties:
+        query: string
+        page: "integer?"
+```
+
+#### Pipe shorthand
+
+For a quick inline union of named types, use `|` between type names:
+
+```yaml
+---schema
+EndpointResult: SuccessPayload | ErrorDetail
+```
+
+This is equivalent to a list-form union with those two variants.
+
+#### Using union types in data
+
+```yaml
+---data
+response <ApiResponse>:
+  status: ok
+  data:
+    id: abc-123
+    created: true
+quick_input <FlexibleInput>: just a string
+```
+
 ### Typed dictionaries (dynamic-key objects)
 
 Use `values` for objects where any string key is allowed, but each value must match a type:
@@ -362,6 +455,119 @@ InventoryConfig:
       - "target_stock >= reorder_point"
 ```
 
+### Mutability
+
+Schema types can declare a `mutability` policy that constrains how data values of that type may be updated over time. This is enforced by the functional section's permission model.
+
+| Value | Meaning |
+|---|---|
+| `frozen` | The value may never be changed after initial write. |
+| `monotone_increase` | The value may only increase (e.g. an ever-growing counter). |
+| `replace` | The value may be freely replaced. (Default when `mutability` is omitted.) |
+
+```yaml
+---schema
+Score:
+  type: integer
+  minimum: 0
+  mutability: monotone_increase
+
+PlayerName:
+  type: string
+  mutability: frozen
+
+LevelLabel:
+  type: string
+  mutability: replace
+```
+
+#### Instance-level freeze (`^`)
+
+Append `^` to a data key to freeze that specific instance, regardless of the type-level `mutability` policy. Even if the type allows changes, the key with `^` cannot be written by any function.
+
+```yaml
+---data
+score <Score>: 0
+high_score^: 9999   # frozen at the instance level; no function may write this key
+level <LevelLabel>: "Beginner"
+```
+
+The `^` suffix is stripped from the output key name — `high_score^` compiles to `"high_score"` in JSON.
+
+### Versioned fields
+
+Properties in an object type can carry lifecycle annotations that describe when they were introduced, deprecated, or removed. The compiler checks these annotations against `meta.file.schema_version` and emits warnings or errors accordingly.
+
+| Annotation | Value | Meaning |
+|---|---|---|
+| `field_number` | positive integer | Stable protobuf-style field identity (must be unique when `strict_field_numbers: true`) |
+| `since` | semver string | Version when the field was introduced. Error if `schema_version` is older than `since`. |
+| `deprecated` | semver string or object | Version when the field was deprecated. A warning is emitted when a data value uses this field and `schema_version` >= the deprecated version. |
+| `removed` | semver string | Version when the field was removed. Error if `schema_version` >= `removed` and the data still contains the field. |
+
+The `deprecated` annotation accepts two forms:
+
+```yaml
+# Simple form — just a version string
+username:
+  type: string
+  deprecated: "1.5.0"
+  optional: true
+
+# Rich form — version, severity, and human-readable message
+phone:
+  type: string
+  deprecated:
+    version: "2.0.0"
+    severity: warning
+    message: "Contact by email only; phone field will be removed in v3.0"
+  optional: true
+```
+
+Full example:
+
+```yaml
+---!syaml/v0
+---meta
+file:
+  schema_version: "2.1.0"
+  strict_field_numbers: true
+
+---schema
+UserProfile:
+  type: object
+  properties:
+    id:
+      type: integer
+      field_number: 1
+      since: "1.0.0"
+    name:
+      type: string
+      field_number: 2
+      since: "1.0.0"
+    email:
+      type: string
+      field_number: 3
+      since: "1.0.0"
+    phone:
+      type: string
+      field_number: 4
+      since: "1.0.0"
+      deprecated:
+        version: "2.0.0"
+        severity: warning
+        message: "Contact by email only; phone field will be removed in v3.0"
+      optional: true
+    old_id:
+      type: string
+      field_number: 5
+      since: "1.0.0"
+      removed: "2.0.0"
+      optional: true
+```
+
+Deprecation warnings are printed to stderr during `compile` and `validate`. They do not prevent successful compilation.
+
 ### String constructors
 
 String constructors let compact string values be expanded into structured objects at compile time. They are defined on object schemas.
@@ -430,14 +636,17 @@ Use `from_enum: TypeName` to validate a captured string against a named enum typ
 
 ### Complete schema keyword reference
 
-| Category   | Keywords                                                       |
-| ---------- | -------------------------------------------------------------- |
-| Common     | `type`, `enum`                                                 |
-| Numeric    | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`   |
-| String     | `minLength`, `maxLength`, `pattern`                            |
+| Category   | Keywords |
+| ---------- | -------- |
+| Common     | `type`, `enum` |
+| Numeric    | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` |
+| String     | `minLength`, `maxLength`, `pattern` |
 | Object     | `properties`, `values`, `required`, `optional`, `constructors` |
-| Array      | `items`, `minItems`, `maxItems`                                |
-| Validation | `constraints`                                                  |
+| Array      | `items`, `minItems`, `maxItems` |
+| Validation | `constraints` |
+| Union      | `tag`, `tag_required`, `options` (on `type: union`) |
+| Versioning | `field_number`, `since`, `deprecated`, `removed` (on properties) |
+| Mutability | `mutability` (`frozen`, `monotone_increase`, `replace`) |
 
 ---
 
@@ -791,6 +1000,119 @@ imports:
 - Schema types must be referenced with the alias prefix (`shared.Port`, not `Port`).
 - Hash and signature are verified on the raw file bytes before any parsing.
 - Version is checked after compilation against `meta.file.version`.
+
+---
+
+## The `functional` Section
+
+The `functional` section declares named functions whose inputs, outputs, permissions, and behavioral contracts are all specified in the `.syaml` file. The compiler validates the contracts at compile time and generates typed stub code (Rust or TypeScript) from them.
+
+```yaml
+---functional
+FunctionName:
+  inputs:
+    param_name:
+      type: TypeName   # any schema type or primitive
+      mutable: false   # whether the caller may mutate this parameter (default false)
+  output:
+    type: TypeName
+  errors:
+    - ErrorTypeName    # optional list of error types the function may raise
+  permissions:
+    data:
+      read:
+        - "$.path.to.field"   # JSONPath-style selectors for readable data fields
+      write:
+        - "$.path.to.field"   # JSONPath-style selectors for writable data fields
+  specification:
+    description: "Human-readable description of the function."
+    preconditions:
+      strict:
+        - "input.param_name > 0"   # evaluatable expression; variables: input.*, data.*, output.*
+      semantic:
+        - "param_name must be positive"  # human-readable prose
+    postconditions:
+      strict:
+        - "output >= input.param_name"
+      semantic:
+        - "result is at least as large as the input"
+```
+
+### Function fields
+
+| Field | Required | Description |
+|---|---|---|
+| `inputs` | no | Named input parameters with `type` and optional `mutable` flag. Inline object/array schemas generate named types in codegen. |
+| `output` | no | Return type declaration. |
+| `errors` | no | List of named error types the function may raise. |
+| `permissions.data.read` | no | JSONPath selectors for data fields the function is allowed to read. |
+| `permissions.data.write` | no | JSONPath selectors for data fields the function is allowed to write. |
+| `specification.description` | no | Free-form description. |
+| `specification.preconditions.strict` | no | Evaluatable boolean expressions checked before execution. Scope: `input.*`, `data.*`. |
+| `specification.preconditions.semantic` | no | Human-readable intent (not evaluated). |
+| `specification.postconditions.strict` | no | Evaluatable boolean expressions checked after execution. Scope: `input.*`, `data.*`, `output`. |
+| `specification.postconditions.semantic` | no | Human-readable intent (not evaluated). |
+
+### Strict condition expressions
+
+Strict pre/postconditions use the same expression language as schema `constraints`, with three available variable roots:
+
+- `input.<param>` — references an input parameter by name
+- `data.<path>` — references a compiled data field (must be in the function's `read` permissions)
+- `output` — references the return value (postconditions only)
+
+The compiler validates that references use only these three roots and that `data.*` paths are listed in `permissions.data.read`. Invalid paths are a compile error.
+
+### Generated code
+
+When compiled with `--format rust` or `--format ts`, each function with strict conditions produces four generated functions:
+
+1. `check_preconditions(...)` — validates all `preconditions.strict` expressions
+2. `<function_name>_impl(...)` — the stub to fill in with implementation
+3. `check_postconditions(...)` — validates all `postconditions.strict` expressions
+4. `<function_name>(...)` — public entry point that chains 1 → 2 → 3
+
+### Example
+
+```yaml
+---!syaml/v0
+---schema
+Score:
+  type: integer
+  minimum: 0
+
+---data
+score <Score>: 0
+high_score: 9999
+
+---functional
+AddPoints:
+  inputs:
+    points:
+      type: integer
+      mutable: false
+  output:
+    type: Score
+  permissions:
+    data:
+      read:
+        - "$.score"
+        - "$.high_score"
+      write:
+        - "$.score"
+  specification:
+    preconditions:
+      strict:
+        - "input.points > 0"
+        - "input.points < data.high_score"
+      semantic:
+        - "points must be positive and less than the high score ceiling"
+    postconditions:
+      strict:
+        - "output >= input.points"
+      semantic:
+        - "score increases by the given points"
+```
 
 ---
 
@@ -1309,6 +1631,8 @@ let compiled = compile_document(input, &env)?;
 ---meta
 file:                                      # Optional file metadata
   owner: team-name
+  schema_version: "2.0.0"                 # Active schema version (for versioned fields)
+  strict_field_numbers: true              # Enforce unique field_number per type
 env:                                       # Environment bindings
   VAR_NAME:
     from: env
@@ -1322,8 +1646,31 @@ TypeName:                                  # Named type definition
   type: integer                            # Primitive type
   minimum: 0                               # Numeric constraint keyword
   constraints: "value >= 1"                # Expression constraint
+  mutability: frozen                       # frozen | monotone_increase | replace
 
 EnumName: [a, b, c]                        # String enum shorthand
+
+PipeUnion: TypeA | TypeB                   # Pipe shorthand union
+
+TaggedUnion:                               # Tagged dispatch union
+  type: union
+  tag: kind
+  tag_required: true
+  options:
+    variant_a:
+      type: object
+      properties: { kind: string }
+    variant_b:
+      type: object
+      properties: { kind: string }
+
+OrderedUnion:                              # Ordered matching union
+  type: union
+  options:
+    - string
+    - type: object
+      properties:
+        query: string
 
 ObjectType:                                # Object type
   type: object
@@ -1334,6 +1681,10 @@ ObjectType:                                # Object type
     typed_prop:                            # Full property definition
       type: TypeName
       constraints: "value <= 100"
+      field_number: 1                      # Versioned field: stable identity
+      since: "1.0.0"                       # Versioned field: introduced in
+      deprecated: "2.0.0"                  # Versioned field: deprecated in (or object with version/severity/message)
+      removed: "3.0.0"                     # Versioned field: removed in
   values:                                  # Typed dictionary (dynamic keys)
     type: ValueType
   constraints:                             # Cross-field constraints
@@ -1359,6 +1710,7 @@ derived <integer>: "=a + b"               # Expression
 interpolated <string>: "prefix ${a} suffix"  # Interpolation
 env_value <string>: "${env.VAR_NAME}"      # Environment reference
 _private_key: internal_only               # Private (stripped from output)
+frozen_key^: 9999                          # Instance-level freeze (^ stripped from output key)
 
 template_result <TypeName>:                # Template invocation
   {{path.to.template}}:
@@ -1374,4 +1726,24 @@ _templates:
   example:
     locked_field!: value                   # Cannot be overridden by siblings
     open_field: value                      # Can be overridden by siblings
+
+---functional
+FunctionName:                              # Function declaration
+  inputs:
+    param:
+      type: TypeName
+      mutable: false
+  output:
+    type: TypeName
+  permissions:
+    data:
+      read: ["$.field"]
+      write: ["$.field"]
+  specification:
+    preconditions:
+      strict: ["input.param > 0"]          # Evaluatable (input.*, data.*, output)
+      semantic: ["param must be positive"] # Human-readable prose
+    postconditions:
+      strict: ["output >= input.param"]
+      semantic: ["result is at least input"]
 ```
