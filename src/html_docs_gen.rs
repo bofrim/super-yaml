@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 
 use crate::ast::{FunctionalDoc, Meta, SchemaDoc};
+use crate::section_scanner::scan_sections;
 use crate::{parse_document_or_manifest, SyamlError};
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -20,6 +21,7 @@ use crate::{parse_document_or_manifest, SyamlError};
 /// document are rendered as internal anchor links.
 pub fn generate_html_docs(input: &str) -> Result<String, SyamlError> {
     let parsed = parse_document_or_manifest(input)?;
+    let raw_data = extract_raw_data_section(input);
     let file_title = "SYAML Documentation";
     Ok(assemble_page(
         file_title,
@@ -27,6 +29,7 @@ pub fn generate_html_docs(input: &str) -> Result<String, SyamlError> {
         &parsed.schema,
         parsed.functional.as_ref(),
         Some(&parsed.data.value),
+        raw_data.as_deref(),
     ))
 }
 
@@ -40,6 +43,7 @@ pub fn generate_html_docs_from_path(path: impl AsRef<Path>) -> Result<String, Sy
         SyamlError::ImportError(format!("failed to read '{}': {e}", path.display()))
     })?;
     let parsed = parse_document_or_manifest(&input)?;
+    let raw_data = extract_raw_data_section(&input);
     let file_title = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -51,6 +55,7 @@ pub fn generate_html_docs_from_path(path: impl AsRef<Path>) -> Result<String, Sy
         &parsed.schema,
         parsed.functional.as_ref(),
         Some(&parsed.data.value),
+        raw_data.as_deref(),
         base_dir,
     ))
 }
@@ -63,8 +68,17 @@ fn assemble_page(
     schema: &SchemaDoc,
     functional: Option<&FunctionalDoc>,
     data: Option<&JsonValue>,
+    raw_data: Option<&str>,
 ) -> String {
-    assemble_page_with_paths(title, meta, schema, functional, data, Path::new("."))
+    assemble_page_with_paths(
+        title,
+        meta,
+        schema,
+        functional,
+        data,
+        raw_data,
+        Path::new("."),
+    )
 }
 
 fn assemble_page_with_paths(
@@ -73,6 +87,7 @@ fn assemble_page_with_paths(
     schema: &SchemaDoc,
     functional: Option<&FunctionalDoc>,
     data: Option<&JsonValue>,
+    raw_data: Option<&str>,
     _base_dir: &Path,
 ) -> String {
     // Build import alias → relative html path map for cross-linking
@@ -82,7 +97,10 @@ fn assemble_page_with_paths(
                 .iter()
                 .filter_map(|(alias, binding)| {
                     let raw = &binding.path;
-                    if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with('@') {
+                    if raw.starts_with("http://")
+                        || raw.starts_with("https://")
+                        || raw.starts_with('@')
+                    {
                         return None;
                     }
                     let html_path = Path::new(raw)
@@ -106,7 +124,7 @@ fn assemble_page_with_paths(
     // Only render data section if the value is non-null and non-empty
     let data_html = data
         .filter(|v| !is_empty_data(v))
-        .map(render_data_section)
+        .map(|v| render_data_section(v, raw_data))
         .unwrap_or_default();
 
     let nav_items = build_nav_items(schema, functional, data.filter(|v| !is_empty_data(v)));
@@ -137,15 +155,19 @@ fn assemble_page_with_paths(
 {data_html}
 </main>
 <script>
-function toggleData() {{
-  var el = document.getElementById('data-content');
-  var btn = document.getElementById('data-toggle');
-  if (el.style.display === 'none') {{
-    el.style.display = 'block';
-    btn.textContent = 'Hide data';
+function toggleJsonView() {{
+  var syaml = document.getElementById('syaml-content');
+  var json  = document.getElementById('json-content');
+  var btn   = document.getElementById('json-toggle');
+  var showingJson = json.style.display !== 'none';
+  if (showingJson) {{
+    json.style.display  = 'none';
+    syaml.style.display = 'block';
+    btn.textContent = 'Show JSON';
   }} else {{
-    el.style.display = 'none';
-    btn.textContent = 'Show data';
+    syaml.style.display = 'none';
+    json.style.display  = 'block';
+    btn.textContent = 'Show SYAML';
   }}
 }}
 </script>
@@ -164,7 +186,11 @@ function toggleData() {{
 
 // ─── Nav sidebar ─────────────────────────────────────────────────────────────
 
-fn build_nav_items(schema: &SchemaDoc, functional: Option<&FunctionalDoc>, data: Option<&JsonValue>) -> String {
+fn build_nav_items(
+    schema: &SchemaDoc,
+    functional: Option<&FunctionalDoc>,
+    data: Option<&JsonValue>,
+) -> String {
     let mut items = String::new();
 
     if !schema.types.is_empty() {
@@ -225,10 +251,16 @@ fn render_meta_section(meta: &Meta, import_html_paths: &BTreeMap<String, String>
     // Imports
     if !meta.imports.is_empty() {
         html.push_str("<h3>Imports</h3>\n<table class=\"prop-table\">\n");
-        html.push_str("<thead><tr><th>Alias</th><th>Path</th><th>Sections</th></tr></thead>\n<tbody>\n");
+        html.push_str(
+            "<thead><tr><th>Alias</th><th>Path</th><th>Sections</th></tr></thead>\n<tbody>\n",
+        );
         for (alias, binding) in &meta.imports {
             let path_cell = if let Some(html_path) = import_html_paths.get(alias) {
-                format!("<a href=\"{}\">{}</a>", html_escape(html_path), html_escape(&binding.path))
+                format!(
+                    "<a href=\"{}\">{}</a>",
+                    html_escape(html_path),
+                    html_escape(&binding.path)
+                )
             } else {
                 html_escape(&binding.path)
             };
@@ -274,6 +306,256 @@ fn render_meta_section(meta: &Meta, import_html_paths: &BTreeMap<String, String>
 
 // ─── Data section ─────────────────────────────────────────────────────────────
 
+// ── SYAML syntax highlighter ─────────────────────────────────────────────────
+//
+// Processes raw SYAML source line-by-line, wrapping recognised tokens in
+// <span class="hl-*"> elements.  The highlighter understands:
+//   • full-line and inline comments  (#)
+//   • list-item markers             (-)
+//   • keys                          (identifier before < or :)
+//   • type hints                    (<alias.TypeName>)
+//   • the colon separator           (:)
+//   • quoted strings                ("…" / '…')
+//   • numbers with optional units   (42, 3.14, 1024bytes, 2.5mb)
+//   • YAML keywords                 (true, false, null, ~)
+//   • plain unquoted values         (enum members, bare identifiers)
+
+fn hl_span(class: &str, content: &str) -> String {
+    format!("<span class=\"{class}\">{content}</span>")
+}
+
+/// Find the position of the first `:` that acts as a YAML key-value separator:
+/// i.e. `:` followed by a space/tab or at the very end of the string.
+fn find_colon_sep(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    for i in 0..b.len() {
+        if b[i] == b':' {
+            match b.get(i + 1) {
+                None | Some(b' ') | Some(b'\t') => return Some(i),
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Highlight a single SYAML value token (the right-hand side of `key: VALUE`).
+fn hl_value(val: &str) -> String {
+    if val.is_empty() {
+        return String::new();
+    }
+
+    // Inline comment appended after value (e.g. `42 # count`)
+    // Split on first ` #` sequence outside a quoted string.
+    let (val_part, comment_part) = split_inline_comment(val);
+
+    let highlighted = hl_value_token(val_part.trim_end());
+
+    let comment_html = if comment_part.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", hl_span("hl-comment", &html_escape(comment_part)))
+    };
+
+    format!("{highlighted}{comment_html}")
+}
+
+fn hl_value_token(val: &str) -> String {
+    if val.is_empty() {
+        return String::new();
+    }
+
+    let first = val.as_bytes()[0];
+
+    // Quoted string
+    if first == b'"' || first == b'\'' {
+        return hl_span("hl-string", &html_escape(val));
+    }
+
+    // YAML keywords
+    if matches!(val, "true" | "false" | "null" | "~") {
+        return hl_span("hl-keyword", val);
+    }
+
+    // Pure number
+    if val.parse::<f64>().is_ok() {
+        return hl_span("hl-number", val);
+    }
+
+    // Number with a unit suffix: digits (+ optional decimal) followed by non-digit letters
+    // e.g. "1024bytes", "2.5mb", "50px"
+    if first.is_ascii_digit() {
+        let num_end = val
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(val.len());
+        if num_end > 0 && num_end < val.len() {
+            let num_part = &val[..num_end];
+            let unit_part = &val[num_end..];
+            // Only treat as number+unit when the suffix is alphabetic
+            if unit_part.chars().all(|c| c.is_alphabetic()) {
+                return format!(
+                    "{}{}",
+                    hl_span("hl-number", num_part),
+                    hl_span("hl-unit", &html_escape(unit_part))
+                );
+            }
+        }
+    }
+
+    // URLs — render as strings
+    if val.starts_with("http://") || val.starts_with("https://") {
+        return hl_span("hl-string", &html_escape(val));
+    }
+
+    // Plain value (enum member, identifier, etc.)
+    hl_span("hl-value", &html_escape(val))
+}
+
+/// Split `text` into (value_part, comment_part) where `comment_part` begins
+/// at the first ` #` that is not inside a quoted string.
+fn split_inline_comment(text: &str) -> (&str, &str) {
+    let mut in_quote: Option<u8> = None;
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match in_quote {
+            Some(q) if b[i] == q => in_quote = None,
+            Some(_) => {}
+            None => {
+                if b[i] == b'"' || b[i] == b'\'' {
+                    in_quote = Some(b[i]);
+                } else if b[i] == b'#' && i > 0 && b[i - 1] == b' ' {
+                    return (&text[..i - 1], &text[i..]);
+                }
+            }
+        }
+        i += 1;
+    }
+    (text, "")
+}
+
+/// Apply syntax highlighting to a raw SYAML data-section body.
+/// Returns an HTML string with `<span>` tags; suitable for use inside `<pre><code>`.
+fn highlight_syaml_source(source: &str) -> String {
+    source
+        .lines()
+        .map(highlight_syaml_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn highlight_syaml_line(line: &str) -> String {
+    // Preserve leading indentation verbatim.
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let trimmed = &line[indent_len..];
+
+    let mut out = html_escape(indent);
+
+    if trimmed.is_empty() {
+        return out;
+    }
+
+    // Full-line comment
+    if trimmed.starts_with('#') {
+        out.push_str(&hl_span("hl-comment", &html_escape(trimmed)));
+        return out;
+    }
+
+    // List-item marker
+    let content = if let Some(rest) = trimmed.strip_prefix("- ") {
+        out.push_str(&hl_span("hl-op", "-"));
+        out.push(' ');
+        rest
+    } else if trimmed == "-" {
+        out.push_str(&hl_span("hl-op", "-"));
+        return out;
+    } else {
+        trimmed
+    };
+
+    // If the content starts with a quote it's a bare scalar list item — no key.
+    if content.starts_with('"') || content.starts_with('\'') {
+        out.push_str(&hl_value(content));
+        return out;
+    }
+
+    // Determine where the key ends: at the first `<` (type hint) or the first
+    // colon-separator, whichever comes first.
+    let lt_pos = content.find('<');
+    let colon_pos = find_colon_sep(content);
+
+    let key_end = match (lt_pos, colon_pos) {
+        (Some(t), Some(c)) => t.min(c),
+        (Some(t), None) => t,
+        (None, Some(c)) => c,
+        (None, None) => {
+            // No separator at all: the whole thing is a bare key (sub-object on next lines)
+            // or a plain scalar that didn't start with a quote.
+            // Treat as plain value if it doesn't look like an identifier.
+            let is_identifier = content
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-');
+            if is_identifier {
+                out.push_str(&hl_span("hl-key", &html_escape(content)));
+            } else {
+                out.push_str(&hl_value(content));
+            }
+            return out;
+        }
+    };
+
+    // Emit key (trimming trailing space before type hint / colon)
+    let key_raw = &content[..key_end];
+    let key = key_raw.trim_end();
+    if !key.is_empty() {
+        out.push_str(&hl_span("hl-key", &html_escape(key)));
+    }
+    // Preserve whitespace between key and type hint / colon
+    if key.len() < key_raw.len() {
+        out.push_str(&html_escape(&key_raw[key.len()..]));
+    }
+
+    let rest = &content[key_end..];
+
+    // Optional type hint  <alias.TypeName>
+    let rest = if rest.starts_with('<') {
+        match rest.find('>') {
+            Some(end) => {
+                out.push_str(&hl_span("hl-type", &html_escape(&rest[..=end])));
+                &rest[end + 1..]
+            }
+            None => {
+                out.push_str(&html_escape(rest));
+                ""
+            }
+        }
+    } else {
+        rest
+    };
+
+    // Colon separator and value
+    if let Some(after_colon) = rest.strip_prefix(':') {
+        out.push_str(&hl_span("hl-op", ":"));
+        // One space between colon and value
+        if let Some(value) = after_colon.strip_prefix(' ') {
+            out.push(' ');
+            if !value.is_empty() {
+                out.push_str(&hl_value(value));
+            }
+        } else if !after_colon.is_empty() {
+            // Colon immediately followed by something unexpected — pass through.
+            out.push_str(&html_escape(after_colon));
+        }
+    } else if !rest.is_empty() {
+        out.push_str(&html_escape(rest));
+    }
+
+    out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Returns true when the data value is effectively empty (null or empty object).
 fn is_empty_data(val: &JsonValue) -> bool {
     match val {
@@ -283,25 +565,49 @@ fn is_empty_data(val: &JsonValue) -> bool {
     }
 }
 
-/// Renders the `---data` section with a show/hide toggle button.
-fn render_data_section(data: &JsonValue) -> String {
-    let pretty = serde_json::to_string_pretty(data).unwrap_or_else(|_| "{}".to_string());
+/// Extracts the raw body of the `---data` section from a `.syaml` source string.
+fn extract_raw_data_section(content: &str) -> Option<String> {
+    let (_, sections) = scan_sections(content).ok()?;
+    sections
+        .into_iter()
+        .find(|s| s.name == "data")
+        .map(|s| s.body)
+}
+
+/// Renders the `---data` section.
+///
+/// The raw SYAML source is always shown. Clicking "Show JSON" opens the
+/// compiled JSON panel to the right of the SYAML block in a side-by-side layout.
+fn render_data_section(data: &JsonValue, raw_syaml: Option<&str>) -> String {
+    let pretty_json = serde_json::to_string_pretty(data).unwrap_or_else(|_| "{}".to_string());
+
+    let syaml_inner = match raw_syaml {
+        Some(raw) if !raw.trim().is_empty() => highlight_syaml_source(raw.trim_end()),
+        _ => String::new(),
+    };
+
     format!(
         r#"<section class="doc-section" id="data-section">
-<h2>Data</h2>
-<button class="data-toggle-btn" onclick="toggleData()" id="data-toggle">Show data</button>
-<div id="data-content" style="display:none">
-<pre><code>{code}</code></pre>
+<h2>Data <button class="data-toggle-btn" onclick="toggleJsonView()" id="json-toggle">Show JSON</button></h2>
+<div id="syaml-content">
+  <pre class="syaml-source"><code>{syaml_code}</code></pre>
+</div>
+<div id="json-content" style="display:none">
+  <pre><code>{json_code}</code></pre>
 </div>
 </section>
 "#,
-        code = html_escape(&pretty),
+        syaml_code = syaml_inner,
+        json_code = html_escape(&pretty_json),
     )
 }
 
 // ─── Schema section ──────────────────────────────────────────────────────────
 
-fn render_schema_section(schema: &SchemaDoc, import_html_paths: &BTreeMap<String, String>) -> String {
+fn render_schema_section(
+    schema: &SchemaDoc,
+    import_html_paths: &BTreeMap<String, String>,
+) -> String {
     if schema.types.is_empty() {
         return String::new();
     }
@@ -357,7 +663,10 @@ fn render_type_card(
 
     // Description if present
     if let Some(desc) = type_val.get("description").and_then(|v| v.as_str()) {
-        html.push_str(&format!("<p class=\"type-desc\">{}</p>\n", html_escape(desc)));
+        html.push_str(&format!(
+            "<p class=\"type-desc\">{}</p>\n",
+            html_escape(desc)
+        ));
     }
 
     // Render body based on kind
@@ -447,7 +756,10 @@ fn collect_field_notes(val: &JsonValue) -> String {
         notes.push(format!("since {}", html_escape(since)));
     }
     if let Some(fn_num) = val.get("field_number") {
-        notes.push(format!("field #{}", html_escape(&json_value_display(fn_num))));
+        notes.push(format!(
+            "field #{}",
+            html_escape(&json_value_display(fn_num))
+        ));
     }
     notes.join("; ")
 }
@@ -480,10 +792,16 @@ fn render_array_type(val: &JsonValue, import_html_paths: &BTreeMap<String, Strin
         html.push_str(&format!("<p>Items: {item_type}</p>\n"));
     }
     if let Some(min) = val.get("minItems") {
-        html.push_str(&format!("<p>Min items: <code>{}</code></p>\n", html_escape(&json_value_display(min))));
+        html.push_str(&format!(
+            "<p>Min items: <code>{}</code></p>\n",
+            html_escape(&json_value_display(min))
+        ));
     }
     if let Some(max) = val.get("maxItems") {
-        html.push_str(&format!("<p>Max items: <code>{}</code></p>\n", html_escape(&json_value_display(max))));
+        html.push_str(&format!(
+            "<p>Max items: <code>{}</code></p>\n",
+            html_escape(&json_value_display(max))
+        ));
     }
     html
 }
@@ -510,7 +828,15 @@ fn render_union_type(val: &JsonValue, import_html_paths: &BTreeMap<String, Strin
 
 fn render_scalar_type(val: &JsonValue) -> String {
     let mut parts = Vec::new();
-    for key in &["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "pattern"] {
+    for key in &[
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "minLength",
+        "maxLength",
+        "pattern",
+    ] {
         if let Some(v) = val.get(*key) {
             parts.push(format!(
                 "<code>{}: {}</code>",
@@ -526,13 +852,17 @@ fn render_scalar_type(val: &JsonValue) -> String {
 }
 
 fn render_constraints(constraints: &BTreeMap<String, Vec<String>>) -> String {
-    let mut html = String::from("<div class=\"constraints\">\n<strong>Constraints:</strong>\n<ul>\n");
+    let mut html =
+        String::from("<div class=\"constraints\">\n<strong>Constraints:</strong>\n<ul>\n");
     for (path, exprs) in constraints {
         for expr in exprs {
             let label = if path == "$" || path.is_empty() {
                 String::new()
             } else {
-                format!("<code class=\"constraint-path\">{}</code>: ", html_escape(path))
+                format!(
+                    "<code class=\"constraint-path\">{}</code>: ",
+                    html_escape(path)
+                )
             };
             html.push_str(&format!(
                 "<li>{label}<code>{}</code></li>\n",
@@ -547,7 +877,10 @@ fn render_constraints(constraints: &BTreeMap<String, Vec<String>>) -> String {
 fn render_inline_constraints(val: &JsonValue) -> String {
     let exprs: Vec<String> = match val {
         JsonValue::String(s) => vec![s.clone()],
-        JsonValue::Array(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        JsonValue::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         JsonValue::Object(map) => {
             let mut all = Vec::new();
             for (path, v) in map {
@@ -572,7 +905,8 @@ fn render_inline_constraints(val: &JsonValue) -> String {
         return String::new();
     }
 
-    let mut html = String::from("<div class=\"constraints\">\n<strong>Constraints:</strong>\n<ul>\n");
+    let mut html =
+        String::from("<div class=\"constraints\">\n<strong>Constraints:</strong>\n<ul>\n");
     for expr in &exprs {
         html.push_str(&format!("<li><code>{}</code></li>\n", html_escape(expr)));
     }
@@ -582,7 +916,10 @@ fn render_inline_constraints(val: &JsonValue) -> String {
 
 // ─── Functional section ───────────────────────────────────────────────────────
 
-fn render_functional_section(func: &FunctionalDoc, import_html_paths: &BTreeMap<String, String>) -> String {
+fn render_functional_section(
+    func: &FunctionalDoc,
+    import_html_paths: &BTreeMap<String, String>,
+) -> String {
     if func.functions.is_empty() {
         return String::new();
     }
@@ -596,7 +933,10 @@ fn render_functional_section(func: &FunctionalDoc, import_html_paths: &BTreeMap<
             id = html_escape(name)
         ));
         html.push_str("<div class=\"type-header\">\n");
-        html.push_str(&format!("<span class=\"type-name\">{}</span>\n", html_escape(name)));
+        html.push_str(&format!(
+            "<span class=\"type-name\">{}</span>\n",
+            html_escape(name)
+        ));
         html.push_str("<span class=\"kind-badge\">fn</span>\n");
         html.push_str("</div>\n");
 
@@ -655,7 +995,10 @@ fn render_type_ref(type_name: &str, import_html_paths: &BTreeMap<String, String>
 
     // Check if it's a known primitive
     if is_builtin(type_name) {
-        return format!("<code class=\"type-primitive\">{}</code>", html_escape(type_name));
+        return format!(
+            "<code class=\"type-primitive\">{}</code>",
+            html_escape(type_name)
+        );
     }
 
     // Local type reference
@@ -666,7 +1009,10 @@ fn render_type_ref(type_name: &str, import_html_paths: &BTreeMap<String, String>
     )
 }
 
-fn render_type_ref_from_value(val: &JsonValue, import_html_paths: &BTreeMap<String, String>) -> String {
+fn render_type_ref_from_value(
+    val: &JsonValue,
+    import_html_paths: &BTreeMap<String, String>,
+) -> String {
     match val {
         JsonValue::String(s) => render_type_ref(s, import_html_paths),
         JsonValue::Object(map) => {
@@ -690,7 +1036,10 @@ fn render_type_ref_from_value(val: &JsonValue, import_html_paths: &BTreeMap<Stri
 }
 
 fn is_builtin(name: &str) -> bool {
-    matches!(name, "string" | "integer" | "number" | "boolean" | "object" | "array" | "null")
+    matches!(
+        name,
+        "string" | "integer" | "number" | "boolean" | "object" | "array" | "null"
+    )
 }
 
 // ─── Utility helpers ─────────────────────────────────────────────────────────
@@ -773,6 +1122,32 @@ body {
 }
 
 #sidebar li a:hover { background: #f6f8fa; }
+
+/* Home / index link at the top of the sidebar */
+.nav-home {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #57606a;
+  text-decoration: none;
+  border-bottom: 1px solid #d0d7de;
+  margin-bottom: 8px;
+}
+.nav-home:hover { color: #0969da; background: #f6f8fa; }
+.nav-home svg { flex-shrink: 0; }
+
+/* Directory group label in the sidebar (index page) */
+#sidebar li.nav-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #57606a;
+  padding: 10px 16px 2px;
+}
 
 .nav-section {
   font-size: 11px;
@@ -959,19 +1334,27 @@ h4 {
   margin: 12px 0 6px;
 }
 
-/* ── Data toggle button ── */
+/* ── Data section ── */
+
+/* The section heading sits on one line with the toggle button inline */
+#data-section h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .data-toggle-btn {
   display: inline-block;
   font-size: 12px;
   font-weight: 600;
-  padding: 4px 10px;
+  padding: 3px 10px;
   border-radius: 4px;
   border: 1px solid #d0d7de;
   background: #f6f8fa;
   color: #24292f;
   cursor: pointer;
-  margin-bottom: 12px;
   font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+  flex-shrink: 0;
 }
 
 .data-toggle-btn:hover {
@@ -979,7 +1362,39 @@ h4 {
   border-color: #b0b7be;
 }
 
-#data-content pre {
+/* SYAML source — always visible, warm tint */
+pre.syaml-source {
+  background: #fff8f0;
+  border: 1px solid #e6d7c3;
+  border-radius: 6px;
+  padding: 16px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+pre.syaml-source code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+}
+
+/* ── SYAML syntax-highlighting token colours ── */
+.hl-comment { color: #6e7781; font-style: italic; }
+.hl-key     { color: #0550ae; }
+.hl-type    { color: #8250df; }
+.hl-string  { color: #116329; }
+.hl-number  { color: #953800; }
+.hl-unit    { color: #953800; opacity: 0.75; }
+.hl-keyword { color: #cf222e; font-weight: 600; }
+.hl-op      { color: #57606a; }
+.hl-value   { color: #24292f; }
+
+/* Compiled JSON panel — toggled, cool grey */
+#json-content pre {
   background: #f6f8fa;
   border: 1px solid #d0d7de;
   border-radius: 6px;
@@ -989,14 +1404,13 @@ h4 {
   line-height: 1.5;
 }
 
-#data-content code {
+#json-content code {
   background: none;
   padding: 0;
   font-size: 12px;
 }
 "#
 }
-
 
 // ─── Multi-file site generation ──────────────────────────────────────────────
 
@@ -1046,7 +1460,8 @@ pub fn collect_import_graph(root: &Path) -> Result<BTreeMap<PathBuf, String>, Sy
             let base = current_path.parent().unwrap_or(Path::new("."));
             for (_alias, binding) in &meta.imports {
                 let raw = &binding.path;
-                if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with('@') {
+                if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with('@')
+                {
                     continue;
                 }
                 let resolved = base.join(raw);
@@ -1075,16 +1490,12 @@ pub fn discover_module_members(module_syaml: &Path) -> Result<Vec<PathBuf>, Syam
     let mut members: Vec<PathBuf> = Vec::new();
 
     let read_dir = fs::read_dir(dir).map_err(|e| {
-        SyamlError::ImportError(format!(
-            "failed to read directory '{}': {e}",
-            dir.display()
-        ))
+        SyamlError::ImportError(format!("failed to read directory '{}': {e}", dir.display()))
     })?;
 
     for entry in read_dir {
-        let entry = entry.map_err(|e| {
-            SyamlError::ImportError(format!("failed to read directory entry: {e}"))
-        })?;
+        let entry = entry
+            .map_err(|e| SyamlError::ImportError(format!("failed to read directory entry: {e}")))?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("syaml") {
             continue;
@@ -1099,51 +1510,110 @@ pub fn discover_module_members(module_syaml: &Path) -> Result<Vec<PathBuf>, Syam
     Ok(members)
 }
 
+/// Return the longest common ancestor directory shared by all given paths and the base.
+///
+/// For example, given `base = /a/b/c` and paths `[/a/b/d/foo.syaml, /a/b/e/bar.syaml]`,
+/// the common ancestor is `/a/b`.
+fn common_ancestor(base: &Path, paths: &[PathBuf]) -> PathBuf {
+    let mut ancestor: Vec<std::path::Component> = base.components().collect();
+    for path in paths {
+        let path_components: Vec<std::path::Component> = path.components().collect();
+        let common_len = ancestor
+            .iter()
+            .zip(path_components.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        ancestor.truncate(common_len);
+    }
+    ancestor.iter().collect()
+}
+
 /// Generate a multi-file HTML documentation site.
-/// Returns a map of relative output path (e.g. "invoice.html") → HTML content.
+/// Returns a map of relative output path (e.g. "files/module.html") → HTML content.
 /// Always includes an "index.html" entry.
+///
+/// All paths in `roots` and `base_dir` should be canonical (absolute) so that
+/// files from different modules can be correctly placed into namespace-aware
+/// subdirectories in the output.  The effective base used for stripping prefixes
+/// is the common ancestor of `base_dir` and all root paths, which means that
+/// cross-module imports (e.g. `primitives/`, `time/`) land in their own
+/// subdirectories instead of colliding with names from the primary module.
 pub fn generate_html_docs_site(
     roots: &[PathBuf],
     base_dir: &Path,
 ) -> Result<BTreeMap<String, String>, SyamlError> {
     let mut site: BTreeMap<String, String> = BTreeMap::new();
 
-    // Map: canonical file path → relative output HTML path (e.g. "payments/invoice.html")
+    // Canonicalize base_dir so it matches the canonical roots even on systems
+    // where the temp/working directory has symlinks (e.g. macOS /tmp → /private/tmp).
+    let canonical_base = fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
+
+    // Deduplicate roots by canonical path (callers should already pass canonical paths,
+    // but guard here for safety).
+    let unique_roots: Vec<PathBuf> = {
+        let mut seen: BTreeMap<PathBuf, ()> = BTreeMap::new();
+        let mut ordered: Vec<PathBuf> = Vec::new();
+        for p in roots {
+            let canonical = fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+            if seen.insert(canonical.clone(), ()).is_none() {
+                ordered.push(canonical);
+            }
+        }
+        ordered
+    };
+
+    // The effective base is the common ancestor of canonical_base and all root paths.
+    // This naturally expands to cover sibling-module files pulled in via --follow-imports.
+    let effective_base = common_ancestor(&canonical_base, &unique_roots);
+
+    // Map: canonical file path → relative output HTML path (e.g. "files/module.html")
     let mut path_to_rel_html: BTreeMap<PathBuf, String> = BTreeMap::new();
 
     // Compute relative output paths for each root
-    for file_path in roots {
-        let canonical = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.clone());
-        let rel = file_path
-            .strip_prefix(base_dir)
-            .unwrap_or(file_path.as_path());
+    for canonical in &unique_roots {
+        let rel = canonical
+            .strip_prefix(&effective_base)
+            .unwrap_or(canonical.as_path());
         let html_rel = rel.with_extension("html").to_string_lossy().into_owned();
-        path_to_rel_html.insert(canonical, html_rel);
+        path_to_rel_html.insert(canonical.clone(), html_rel);
     }
 
     // Generate HTML for each file
     let mut index_links: Vec<(String, String)> = Vec::new(); // (html_rel_path, title)
 
-    for file_path in roots {
-        let canonical = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.clone());
-        let html_rel = match path_to_rel_html.get(&canonical) {
+    // Iterate over unique_roots (already deduplicated canonical paths).
+    for file_path in &unique_roots {
+        let html_rel = match path_to_rel_html.get(file_path) {
             Some(r) => r.clone(),
             None => continue,
         };
 
         let content = fs::read_to_string(file_path).map_err(|e| {
-            SyamlError::ImportError(format!(
-                "failed to read '{}': {e}",
-                file_path.display()
-            ))
+            SyamlError::ImportError(format!("failed to read '{}': {e}", file_path.display()))
         })?;
 
         let parsed = parse_document_or_manifest(&content)?;
 
-        let file_title = file_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("SYAML Documentation");
+        // Build a title that includes the directory context so that pages from
+        // different modules are clearly distinguishable (e.g. "files / module").
+        let file_title_owned: String = {
+            let stem = file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("doc");
+            let dir = Path::new(&html_rel).parent().and_then(|p| {
+                if p == Path::new("") {
+                    None
+                } else {
+                    p.to_str()
+                }
+            });
+            match dir {
+                Some(d) => format!("{d} / {stem}"),
+                None => stem.to_string(),
+            }
+        };
+        let file_title = file_title_owned.as_str();
 
         // Build import_html_paths for cross-linking from this page's location
         let current_html_dir = Path::new(&html_rel)
@@ -1165,11 +1635,10 @@ pub fn generate_html_docs_site(
                         {
                             return None;
                         }
-                        // Resolve the import to a canonical path
+                        // Resolve the import relative to this (canonical) file's directory.
                         let file_dir = file_path.parent().unwrap_or(Path::new("."));
                         let resolved = file_dir.join(raw);
-                        let resolved_canonical =
-                            fs::canonicalize(&resolved).unwrap_or(resolved);
+                        let resolved_canonical = fs::canonicalize(&resolved).unwrap_or(resolved);
 
                         // Find the html_rel for that canonical path
                         let target_html_rel = path_to_rel_html.get(&resolved_canonical)?;
@@ -1187,7 +1656,15 @@ pub fn generate_html_docs_site(
 
         // Pass data to the assembler so data section is rendered
         let data_val = &parsed.data.value;
-        let data_opt = if is_empty_data(data_val) { None } else { Some(data_val) };
+        let data_opt = if is_empty_data(data_val) {
+            None
+        } else {
+            Some(data_val)
+        };
+        let raw_data = extract_raw_data_section(&content);
+
+        // Compute the relative path from this page back to index.html.
+        let index_href = compute_relative_html_path(&current_html_dir, Path::new("index.html"));
 
         let html = assemble_page_with_import_links(
             file_title,
@@ -1196,9 +1673,17 @@ pub fn generate_html_docs_site(
             parsed.functional.as_ref(),
             data_opt,
             &import_html_paths,
+            Some(&index_href),
+            raw_data.as_deref(),
         );
 
-        index_links.push((html_rel.clone(), file_title.to_string()));
+        // Use the full relative path (without .html) as the index label so that
+        // "files/module" and "primitives/module" are distinguishable.
+        let index_label = Path::new(&html_rel)
+            .with_extension("")
+            .to_string_lossy()
+            .into_owned();
+        index_links.push((html_rel.clone(), index_label));
         site.insert(html_rel, html);
     }
 
@@ -1210,6 +1695,9 @@ pub fn generate_html_docs_site(
 }
 
 /// Assemble a page with an explicit `import_html_paths` map (alias → href).
+/// `index_href` is the relative path from this page back to index.html; when
+/// `Some`, a home icon link is rendered at the top of the sidebar.
+/// `raw_data` is the verbatim `---data` section body from the source file.
 fn assemble_page_with_import_links(
     title: &str,
     meta: Option<&Meta>,
@@ -1217,6 +1705,8 @@ fn assemble_page_with_import_links(
     functional: Option<&FunctionalDoc>,
     data: Option<&JsonValue>,
     import_html_paths: &BTreeMap<String, String>,
+    index_href: Option<&str>,
+    raw_data: Option<&str>,
 ) -> String {
     let meta_html = meta
         .map(|m| render_meta_section(m, import_html_paths))
@@ -1229,10 +1719,22 @@ fn assemble_page_with_import_links(
     // Only render data section if the value is non-null and non-empty
     let data_html = data
         .filter(|v| !is_empty_data(v))
-        .map(render_data_section)
+        .map(|v| render_data_section(v, raw_data))
         .unwrap_or_default();
 
     let nav_items = build_nav_items(schema, functional, data.filter(|v| !is_empty_data(v)));
+
+    let home_link = match index_href {
+        Some(href) => format!(
+            r#"  <a href="{href}" class="nav-home" title="Documentation Index">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    Index
+  </a>
+"#,
+            href = html_escape(href)
+        ),
+        None => String::new(),
+    };
 
     format!(
         r#"<!DOCTYPE html>
@@ -1247,7 +1749,7 @@ fn assemble_page_with_import_links(
 </head>
 <body>
 <nav id="sidebar">
-  <div class="nav-title">{title}</div>
+{home_link}  <div class="nav-title">{title}</div>
   <ul>
 {nav_items}
   </ul>
@@ -1260,15 +1762,19 @@ fn assemble_page_with_import_links(
 {data_html}
 </main>
 <script>
-function toggleData() {{
-  var el = document.getElementById('data-content');
-  var btn = document.getElementById('data-toggle');
-  if (el.style.display === 'none') {{
-    el.style.display = 'block';
-    btn.textContent = 'Hide data';
+function toggleJsonView() {{
+  var syaml = document.getElementById('syaml-content');
+  var json  = document.getElementById('json-content');
+  var btn   = document.getElementById('json-toggle');
+  var showingJson = json.style.display !== 'none';
+  if (showingJson) {{
+    json.style.display  = 'none';
+    syaml.style.display = 'block';
+    btn.textContent = 'Show JSON';
   }} else {{
-    el.style.display = 'none';
-    btn.textContent = 'Show data';
+    syaml.style.display = 'none';
+    json.style.display  = 'block';
+    btn.textContent = 'Show SYAML';
   }}
 }}
 </script>
@@ -1322,21 +1828,79 @@ fn compute_relative_html_path(from_dir: &Path, to_file: &Path) -> String {
 
 /// Generate a simple index page listing all documentation pages.
 fn generate_index_page(links: &[(String, String)]) -> String {
-    let mut list_items = String::new();
-    for (href, title) in links {
-        list_items.push_str(&format!(
-            "    <li><a href=\"{href}\">{title}</a></li>\n",
-            href = html_escape(href),
-            title = html_escape(title),
+    // Sort links so they appear in a stable, alphabetical order.
+    let mut sorted_links: Vec<&(String, String)> = links.iter().collect();
+    sorted_links.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Group by parent directory (the module namespace).
+    // Links at the root (no parent dir) go under an empty-string group.
+    let mut groups: Vec<(String, Vec<&(String, String)>)> = Vec::new();
+    for link in &sorted_links {
+        let dir = Path::new(&link.0)
+            .parent()
+            .and_then(|p| if p == Path::new("") { None } else { p.to_str() })
+            .unwrap_or("")
+            .to_string();
+        if let Some(last) = groups.last_mut() {
+            if last.0 == dir {
+                last.1.push(link);
+                continue;
+            }
+        }
+        groups.push((dir, vec![link]));
+    }
+
+    // Sidebar: flat list showing the leaf filename for brevity with the directory as a prefix label.
+    let mut nav_links = String::new();
+    let mut prev_dir = String::new();
+    for link in &sorted_links {
+        let dir = Path::new(&link.0)
+            .parent()
+            .and_then(|p| if p == Path::new("") { None } else { p.to_str() })
+            .unwrap_or("")
+            .to_string();
+        let stem = Path::new(&link.0)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&link.1);
+        if dir != prev_dir {
+            if !dir.is_empty() {
+                nav_links.push_str(&format!(
+                    "    <li class=\"nav-group-label\">{}</li>\n",
+                    html_escape(&dir)
+                ));
+            }
+            prev_dir = dir;
+        }
+        nav_links.push_str(&format!(
+            "    <li><a href=\"{href}\">{stem}</a></li>\n",
+            href = html_escape(&link.0),
+            stem = html_escape(stem),
         ));
     }
 
-    let mut nav_links = String::new();
-    for (href, title) in links {
-        nav_links.push_str(&format!(
-            "    <li><a href=\"{href}\">{title}</a></li>\n",
-            href = html_escape(href),
-            title = html_escape(title),
+    // Main content: one section per module directory.
+    let mut sections = String::new();
+    for (dir, group_links) in &groups {
+        let heading = if dir.is_empty() {
+            "Root".to_string()
+        } else {
+            html_escape(dir)
+        };
+        let mut items = String::new();
+        for (href, label) in group_links {
+            let stem = Path::new(href)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(label);
+            items.push_str(&format!(
+                "      <li><a href=\"{href}\">{stem}</a></li>\n",
+                href = html_escape(href),
+                stem = html_escape(stem),
+            ));
+        }
+        sections.push_str(&format!(
+            "  <section class=\"doc-section\">\n    <h2>{heading}</h2>\n    <ul>\n{items}    </ul>\n  </section>\n"
         ));
     }
 
@@ -1355,24 +1919,17 @@ fn generate_index_page(links: &[(String, String)]) -> String {
 <nav id="sidebar">
   <div class="nav-title">Documentation Index</div>
   <ul>
-{nav_links}
-  </ul>
+{nav_links}  </ul>
 </nav>
 <main>
   <h1 class="page-title">Documentation Index</h1>
-  <section class="doc-section">
-    <h2>Pages</h2>
-    <ul>
-{list_items}
-    </ul>
-  </section>
-</main>
+{sections}</main>
 </body>
 </html>
 "#,
         css = inline_css(),
         nav_links = nav_links,
-        list_items = list_items,
+        sections = sections,
     )
 }
 
@@ -1404,10 +1961,22 @@ price <Money>:
   currency: USD
 "#;
         let html = generate_html_docs(input).unwrap();
-        assert!(html.contains("id=\"type-Money\""), "should contain Money anchor");
-        assert!(html.contains("id=\"type-Port\""), "should contain Port anchor");
-        assert!(html.contains("href=\"#type-Money\""), "nav should link to Money");
-        assert!(html.contains("<td><code>amount</code>"), "should list amount field");
+        assert!(
+            html.contains("id=\"type-Money\""),
+            "should contain Money anchor"
+        );
+        assert!(
+            html.contains("id=\"type-Port\""),
+            "should contain Port anchor"
+        );
+        assert!(
+            html.contains("href=\"#type-Money\""),
+            "nav should link to Money"
+        );
+        assert!(
+            html.contains("<td><code>amount</code>"),
+            "should list amount field"
+        );
         assert!(html.contains("minimum"), "should show minimum constraint");
     }
 
@@ -1478,33 +2047,45 @@ port: 8080
 
         // Toggle button is present with correct id and initial label
         assert!(
-            html.contains("id=\"data-toggle\""),
-            "should contain data-toggle button"
+            html.contains("id=\"json-toggle\""),
+            "should contain json-toggle button"
         );
         assert!(
-            html.contains("Show data"),
-            "button should initially say 'Show data'"
+            html.contains("Show JSON"),
+            "button should initially say 'Show JSON'"
         );
 
-        // Hidden div is present and starts hidden
+        // Hidden JSON div is present and starts hidden
         assert!(
-            html.contains("id=\"data-content\""),
-            "should contain data-content div"
+            html.contains("id=\"json-content\""),
+            "should contain json-content div"
         );
         assert!(
             html.contains("style=\"display:none\""),
-            "data-content should start hidden"
+            "json-content should start hidden"
         );
 
-        // Actual data values are rendered inside a pre/code block
-        assert!(html.contains("<pre><code>"), "should contain pre/code block");
-        assert!(html.contains("localhost"), "should include data value 'localhost'");
+        // Raw SYAML is visible by default; JSON panel is swapped in on toggle
+        assert!(
+            html.contains("id=\"syaml-content\""),
+            "should contain syaml-content wrapper"
+        );
+        assert!(
+            html.contains("class=\"syaml-source\""),
+            "should contain syaml-source pre block"
+        );
+
+        // Data values appear (in SYAML block and/or JSON block)
+        assert!(
+            html.contains("localhost"),
+            "should include data value 'localhost'"
+        );
         assert!(html.contains("8080"), "should include data value '8080'");
 
         // JS toggle function is included
         assert!(
-            html.contains("function toggleData()"),
-            "should include toggleData JS function"
+            html.contains("function toggleJsonView()"),
+            "should include toggleJsonView JS function"
         );
 
         // Nav sidebar item for Data section
@@ -1554,7 +2135,10 @@ Foo:
         let _ = std::fs::remove_dir_all(&dir);
         assert!(site.contains_key("index.html"), "site must have index.html");
         assert!(site.contains_key("types.html"), "site must have types.html");
-        assert!(site["index.html"].contains("types"), "index should link to types");
+        assert!(
+            site["index.html"].contains("types"),
+            "index should link to types"
+        );
     }
 
     #[test]
@@ -1578,8 +2162,17 @@ Foo:
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
             .collect();
 
-        assert!(names.iter().any(|n| n == "invoice.syaml"), "should include invoice.syaml");
-        assert!(names.iter().any(|n| n == "refund.syaml"), "should include refund.syaml");
-        assert!(!names.iter().any(|n| n == "module.syaml"), "should exclude module.syaml");
+        assert!(
+            names.iter().any(|n| n == "invoice.syaml"),
+            "should include invoice.syaml"
+        );
+        assert!(
+            names.iter().any(|n| n == "refund.syaml"),
+            "should include refund.syaml"
+        );
+        assert!(
+            !names.iter().any(|n| n == "module.syaml"),
+            "should exclude module.syaml"
+        );
     }
 }

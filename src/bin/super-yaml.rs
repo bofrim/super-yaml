@@ -209,10 +209,10 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
 
     if file_name == "module.syaml" {
         // It's a module manifest: discover all member .syaml files
-        base_dir = input_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        base_dir = std::fs::canonicalize(
+            input_path.parent().unwrap_or(Path::new(".")),
+        )
+        .unwrap_or_else(|_| input_path.parent().unwrap_or(Path::new(".")).to_path_buf());
 
         let members = discover_module_members(input_path).map_err(|e| e.to_string())?;
         for member in members {
@@ -222,36 +222,47 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
                     roots.insert(path);
                 }
             }
-            roots.insert(member);
+            // Canonicalize member so it matches the absolute paths from collect_import_graph,
+            // preventing the same file appearing twice under different path forms.
+            let canonical_member = std::fs::canonicalize(&member).unwrap_or(member);
+            roots.insert(canonical_member);
         }
     } else if input_path.is_dir() {
-        base_dir = input_path.to_path_buf();
+        base_dir = std::fs::canonicalize(input_path)
+            .unwrap_or_else(|_| input_path.to_path_buf());
 
-        let entries = std::fs::read_dir(input_path)
-            .map_err(|e| format!("failed to read directory '{}': {e}", input_path.display()))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("failed to read directory entry: {e}"))?;
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext == "syaml" {
-                        if options.follow_imports {
-                            let graph = collect_import_graph(&path).map_err(|e| e.to_string())?;
-                            for p in graph.into_keys() {
-                                roots.insert(p);
+        // Walk the directory tree recursively, collecting all .syaml files.
+        let mut dir_queue: Vec<PathBuf> = vec![input_path.to_path_buf()];
+        while let Some(dir) = dir_queue.pop() {
+            let entries = std::fs::read_dir(&dir)
+                .map_err(|e| format!("failed to read directory '{}': {e}", dir.display()))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("failed to read directory entry: {e}"))?;
+                let path = entry.path();
+                if path.is_dir() {
+                    dir_queue.push(path);
+                } else if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        if ext == "syaml" {
+                            if options.follow_imports {
+                                let graph = collect_import_graph(&path).map_err(|e| e.to_string())?;
+                                for p in graph.into_keys() {
+                                    roots.insert(p);
+                                }
                             }
+                            let canonical_path = std::fs::canonicalize(&path).unwrap_or(path);
+                            roots.insert(canonical_path);
                         }
-                        roots.insert(path);
                     }
                 }
             }
         }
     } else {
         // Regular .syaml file
-        base_dir = input_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        base_dir = std::fs::canonicalize(
+            input_path.parent().unwrap_or(Path::new(".")),
+        )
+        .unwrap_or_else(|_| input_path.parent().unwrap_or(Path::new(".")).to_path_buf());
 
         if options.follow_imports {
             let graph = collect_import_graph(input_path).map_err(|e| e.to_string())?;
@@ -259,7 +270,9 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
                 roots.insert(path);
             }
         }
-        roots.insert(input_path.clone());
+        let canonical_input = std::fs::canonicalize(input_path)
+            .unwrap_or_else(|_| input_path.clone());
+        roots.insert(canonical_input);
     }
 
     let roots_vec: Vec<PathBuf> = roots.into_iter().collect();
