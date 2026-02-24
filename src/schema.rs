@@ -117,6 +117,7 @@ fn validate_schema_type_references_inner(
     match schema {
         JsonValue::Object(map) => {
             validate_constructor_keywords(map, path, types)?;
+            validate_as_string_keyword(map, path)?;
             for (key, child) in map {
                 let child_path = format!("{path}.{key}");
                 if key == "type" {
@@ -650,6 +651,68 @@ fn validate_constructor_keywords(
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+fn validate_as_string_keyword(
+    schema: &serde_json::Map<String, JsonValue>,
+    path: &str,
+) -> Result<(), SyamlError> {
+    let Some(raw_as_string) = schema.get("as_string") else {
+        return Ok(());
+    };
+
+    let declared_type = schema
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "as_string at {path} requires schema node with type: object"
+            ))
+        })?;
+    if declared_type != "object" {
+        return Err(SyamlError::SchemaError(format!(
+            "as_string at {path} requires type: object"
+        )));
+    }
+
+    let template = raw_as_string.as_str().ok_or_else(|| {
+        SyamlError::SchemaError(format!("as_string at {path} must be a string"))
+    })?;
+    if template.is_empty() {
+        return Err(SyamlError::SchemaError(format!(
+            "as_string at {path} must not be empty"
+        )));
+    }
+
+    let property_map = schema.get("properties").and_then(JsonValue::as_object);
+
+    // Parse and validate all {{property_name}} placeholders in the template.
+    let mut remaining = template;
+    while let Some(open) = remaining.find("{{") {
+        remaining = &remaining[open + 2..];
+        let close = remaining.find("}}").ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "as_string at {path} has unclosed '{{{{' in template"
+            ))
+        })?;
+        let placeholder = remaining[..close].trim();
+        if placeholder.is_empty() {
+            return Err(SyamlError::SchemaError(format!(
+                "as_string at {path} has empty placeholder '{{{{}}}}'"
+            )));
+        }
+        if let Some(props) = property_map {
+            if !props.contains_key(placeholder) {
+                return Err(SyamlError::SchemaError(format!(
+                    "as_string at {path} references unknown property '{}' (not declared in properties)",
+                    placeholder
+                )));
+            }
+        }
+        remaining = &remaining[close + 2..];
     }
 
     Ok(())

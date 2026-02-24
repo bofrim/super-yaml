@@ -29,8 +29,24 @@ Url:
   pattern: '^https?://.+'
 
 Semver:
-  type: string
-  pattern: '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+  type: object
+  as_string: "{{major}}.{{minor}}.{{patch}}"
+  properties:
+    major:
+      type: integer
+      minimum: 0
+    minor:
+      type: integer
+      minimum: 0
+    patch:
+      type: integer
+      minimum: 0
+    pre_release: string?
+    build_metadata: string?
+  constructors:
+    semver:
+      order: 1
+      regex: '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)(-(?<pre_release>[0-9A-Za-z.-]+))?(\+(?<build_metadata>[0-9A-Za-z.-]+))?$'
 
 Slug:
   type: string

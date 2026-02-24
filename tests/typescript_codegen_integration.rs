@@ -200,3 +200,33 @@ x: 1
     assert!(rendered.contains("@deprecated"), "missing @deprecated JSDoc");
     assert!(rendered.contains("Use 'name' instead"), "missing deprecation message");
 }
+
+#[test]
+fn generates_to_string_fn_for_as_string_type() {
+    let input = r#"
+---!syaml/v0
+---schema
+Semver:
+  type: object
+  as_string: "{{major}}.{{minor}}.{{patch}}"
+  properties:
+    major:
+      type: integer
+      minimum: 0
+    minor:
+      type: integer
+      minimum: 0
+    patch:
+      type: integer
+      minimum: 0
+---data
+ver: 1
+"#;
+    let rendered = generate_typescript_types(input).unwrap();
+    assert!(rendered.contains("export function semverToString("), "missing tostring fn");
+    assert!(rendered.contains(": Semver): string {"), "missing return type");
+    assert!(rendered.contains("return `"), "missing template literal");
+    assert!(rendered.contains("${semver.major}"), "missing major accessor");
+    assert!(rendered.contains("${semver.minor}"), "missing minor accessor");
+    assert!(rendered.contains("${semver.patch}"), "missing patch accessor");
+}

@@ -2,6 +2,7 @@
 ---schema
 Color:
   type: object
+  as_string: "rgb({{red}}, {{green}}, {{blue}})"
   properties:
     red: integer
     green: integer
@@ -38,3 +39,5 @@ Color:
 accent_rgb <Color>: "rgb(10, 20, 30)"
 accent_rgba <Color>: "rgba(10, 20, 30, 0.5)"
 accent_hex <Color>: "#0A141E80"
+
+color_string <string>: $.accent_rgb

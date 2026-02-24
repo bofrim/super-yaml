@@ -79,7 +79,7 @@ use ast::{
 use coerce::coerce_string_constructors_for_type_hints;
 pub use error::SyamlError;
 use fetch::FetchContext;
-use resolve::{resolve_env_bindings, resolve_expressions_with_imports};
+use resolve::{resolve_data_references, resolve_env_bindings, resolve_expressions_with_imports};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
 pub use rust_codegen::{
     generate_rust_types, generate_rust_types_and_data_from_path, generate_rust_types_from_path,
@@ -599,6 +599,7 @@ fn compile_parsed_document(
 
     extract_explicit_import_values(&mut data, &imported_data)?;
     expand_data_templates(&mut data, &imported_data)?;
+    resolve_data_references(&mut data)?;
 
     let env_values = resolve_env_bindings(parsed.meta.as_ref(), ctx.env_provider)?;
     let imports_for_eval: BTreeMap<String, JsonValue> = imported_data

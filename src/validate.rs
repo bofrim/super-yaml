@@ -87,6 +87,20 @@ fn are_equivalent_type_names(
         return Ok(true);
     }
 
+    // If the expected type is "string" and the hinted type is an object with as_string,
+    // the hinted type satisfies the string constraint.
+    if expected_type == "string" {
+        if let Ok(hinted_schema) = resolve_type_schema(schema, hinted_type) {
+            if hinted_schema
+                .as_object()
+                .map(|obj| obj.contains_key("as_string"))
+                .unwrap_or(false)
+            {
+                return Ok(true);
+            }
+        }
+    }
+
     if !is_namespaced_suffix_match(expected_type, hinted_type) {
         return Ok(false);
     }

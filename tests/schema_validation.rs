@@ -2243,3 +2243,61 @@ item <Child>:
         "expected missing required_field error, got: {msg}"
     );
 }
+
+#[test]
+fn validate_schema_type_references_accepts_valid_as_string() {
+    let schema = parse_schema(&json!({
+        "Version": {
+            "type": "object",
+            "as_string": "{{major}}.{{minor}}.{{patch}}",
+            "properties": {
+                "major": "integer",
+                "minor": "integer",
+                "patch": "integer"
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_schema_type_references(&schema.types).unwrap();
+}
+
+#[test]
+fn validate_schema_type_references_rejects_as_string_on_non_object() {
+    let schema = parse_schema(&json!({
+        "Tag": {
+            "type": "string",
+            "as_string": "{{value}}"
+        }
+    }))
+    .unwrap();
+
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(
+        err.to_string().contains("requires type: object"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn validate_schema_type_references_rejects_as_string_unknown_property() {
+    let schema = parse_schema(&json!({
+        "Version": {
+            "type": "object",
+            "as_string": "{{major}}.{{minor}}.{{unknown}}",
+            "properties": {
+                "major": "integer",
+                "minor": "integer"
+            }
+        }
+    }))
+    .unwrap();
+
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(
+        err.to_string().contains("unknown property 'unknown'"),
+        "unexpected error: {}",
+        err
+    );
+}

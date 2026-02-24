@@ -467,3 +467,129 @@ pub fn get_json_path<'a>(root: &'a JsonValue, path: &str) -> Option<&'a JsonValu
     }
     Some(current)
 }
+
+fn is_data_reference(s: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"^(\$\.|\.)([A-Za-z_][A-Za-z0-9_]*)(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+            .expect("valid regex")
+    });
+    re.is_match(s)
+}
+
+fn parent_path_of(path: &str) -> Option<String> {
+    if path == "$" {
+        return None;
+    }
+    let mut last_sep = None;
+    for (idx, ch) in path.char_indices() {
+        if ch == '.' && idx > 1 {
+            last_sep = Some(idx);
+        } else if ch == '[' {
+            last_sep = Some(idx);
+        }
+    }
+    match last_sep {
+        Some(1) => Some("$".to_string()),
+        Some(idx) => Some(path[..idx].to_string()),
+        None => None,
+    }
+}
+
+fn collect_data_reference_nodes(value: &JsonValue, path: &str, out: &mut Vec<ExpressionNode>) {
+    match value {
+        JsonValue::Object(map) => {
+            for (k, v) in map {
+                let child = format!("{}.{}", path, k);
+                collect_data_reference_nodes(v, &child, out);
+            }
+        }
+        JsonValue::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                let child = format!("{}[{}]", path, i);
+                collect_data_reference_nodes(v, &child, out);
+            }
+        }
+        JsonValue::String(s) => {
+            let trimmed = s.trim();
+            if is_data_reference(trimmed) {
+                out.push(ExpressionNode {
+                    path: path.to_string(),
+                    raw: trimmed.to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Resolves direct data references (`$.path` and `.sibling`) in-place.
+///
+/// Standalone string values matching `$.segment[.segment]*` or `.segment[.segment]*`
+/// are replaced with the referenced value from the document root or the parent object.
+pub fn resolve_data_references(data: &mut JsonValue) -> Result<(), SyamlError> {
+    let mut ref_nodes = Vec::new();
+    collect_data_reference_nodes(data, "$", &mut ref_nodes);
+
+    if ref_nodes.is_empty() {
+        return Ok(());
+    }
+
+    let mut unresolved: HashSet<String> = ref_nodes.iter().map(|n| n.path.clone()).collect();
+    let max_passes = ref_nodes.len() + 1;
+
+    for _ in 0..max_passes {
+        if unresolved.is_empty() {
+            return Ok(());
+        }
+
+        let mut progress = false;
+        for node in &ref_nodes {
+            if !unresolved.contains(&node.path) {
+                continue;
+            }
+
+            let target = if node.raw.starts_with("$.") {
+                node.raw.clone()
+            } else {
+                let parent = parent_path_of(&node.path).ok_or_else(|| {
+                    SyamlError::ExpressionError(format!(
+                        "relative reference `{}` used at the root level",
+                        node.raw
+                    ))
+                })?;
+                format!("{}{}", parent, node.raw)
+            };
+
+            if unresolved.contains(&target) {
+                continue;
+            }
+
+            let value = get_json_path(data, &target)
+                .ok_or_else(|| {
+                    SyamlError::ExpressionError(format!(
+                        "data reference '{}' not found",
+                        node.raw
+                    ))
+                })?
+                .clone();
+
+            set_json_path(data, &node.path, value)?;
+            unresolved.remove(&node.path);
+            progress = true;
+        }
+
+        if !progress {
+            let mut paths: Vec<String> = unresolved.into_iter().collect();
+            paths.sort();
+            return Err(SyamlError::CycleError(format!(
+                "could not resolve data references; possible dependency cycle among: {}",
+                paths.join(", ")
+            )));
+        }
+    }
+
+    Err(SyamlError::CycleError(
+        "data reference resolution exceeded max passes".to_string(),
+    ))
+}

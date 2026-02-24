@@ -165,3 +165,32 @@ x: 1
     assert!(rendered.contains("#[deprecated"), "missing #[deprecated] attribute");
     assert!(rendered.contains("Use 'name' instead"), "missing deprecation message");
 }
+
+#[test]
+fn generates_display_impl_for_as_string_type() {
+    let input = r#"
+---!syaml/v0
+---schema
+Semver:
+  type: object
+  as_string: "{{major}}.{{minor}}.{{patch}}"
+  properties:
+    major:
+      type: integer
+      minimum: 0
+    minor:
+      type: integer
+      minimum: 0
+    patch:
+      type: integer
+      minimum: 0
+---data
+ver: 1
+"#;
+    let rendered = generate_rust_types(input).unwrap();
+    assert!(rendered.contains("impl std::fmt::Display for Semver {"), "missing Display impl");
+    assert!(rendered.contains("fn fmt(&self, f: &mut std::fmt::Formatter"), "missing fmt fn");
+    assert!(rendered.contains("self.major"), "missing major accessor");
+    assert!(rendered.contains("self.minor"), "missing minor accessor");
+    assert!(rendered.contains("self.patch"), "missing patch accessor");
+}

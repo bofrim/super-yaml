@@ -669,6 +669,57 @@ fn render_object_struct(
     }
 
     out.push_str("}\n");
+
+    if let Some(template) = schema_obj.get("as_string").and_then(JsonValue::as_str) {
+        out.push('\n');
+        out.push_str(&render_display_impl(name, template));
+    }
+
+    out
+}
+
+/// Parses an `as_string` template into a `Display` implementation for `name`.
+///
+/// Template syntax: literal text interspersed with `{{property_name}}` placeholders.
+fn render_display_impl(name: &str, template: &str) -> String {
+    // Collect alternating segments: (format_str_piece, field_accessor).
+    let mut format_str = String::new();
+    let mut args: Vec<String> = Vec::new();
+    let mut remaining = template;
+
+    while let Some(open) = remaining.find("{{") {
+        // Literal text before the placeholder.
+        let literal = &remaining[..open];
+        if !literal.is_empty() {
+            format_str.push_str(&literal.replace('{', "{{").replace('}', "}}"));
+        }
+        remaining = &remaining[open + 2..];
+        if let Some(close) = remaining.find("}}") {
+            let placeholder = remaining[..close].trim();
+            format_str.push_str("{}");
+            args.push(format!("self.{}", sanitize_field_name(placeholder)));
+            remaining = &remaining[close + 2..];
+        }
+    }
+    // Trailing literal after the last placeholder.
+    if !remaining.is_empty() {
+        format_str.push_str(&remaining.replace('{', "{{").replace('}', "}}"));
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!("impl std::fmt::Display for {name} {{\n"));
+    out.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+    if args.is_empty() {
+        out.push_str(&format!("        write!(f, \"{}\")\n", format_str));
+    } else {
+        out.push_str(&format!(
+            "        write!(f, \"{}\", {})\n",
+            format_str,
+            args.join(", ")
+        ));
+    }
+    out.push_str("    }\n");
+    out.push_str("}\n");
     out
 }
 

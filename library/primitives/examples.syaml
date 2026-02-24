@@ -9,8 +9,9 @@ _examples:
   uuid <prim.Uuid>: 550e8400-e29b-41d4-a716-446655440000
   email <prim.Email>: user@example.com
   url <prim.Url>: https://example.com/path
-  semver <prim.Semver>: 1.2.3
-  semver_pre <prim.Semver>: 2.0.0-alpha.1
+  semver <prim.Semver>: "1.2.3"
+  semver_pre <prim.Semver>: "2.0.0-alpha.1"
+  semver_build <prim.Semver>: "3.1.0-beta.2+build.456"
   slug <prim.Slug>: my-feature-flag
   sha256 <prim.Sha256Hex>: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   count <prim.NonNegativeInteger>: 0

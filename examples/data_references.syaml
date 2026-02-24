@@ -1,0 +1,44 @@
+---!syaml/v0
+---schema
+# Demonstrates direct data references:
+#   $.path   — file-scope: resolves from the document root
+#   .sibling — current-scope: resolves relative to the parent object
+#
+# _defaults is a private top-level key (stripped from compiled output) that
+# serves as a single source of truth for shared configuration values.
+TlsConfig:
+  type: object
+  properties:
+    enabled: boolean
+    cert_path: string?
+    key_path: string?
+
+EndpointConfig:
+  type: object
+  properties:
+    host: string
+    port: integer
+    admin_port: integer
+    timeout: integer
+    tls: TlsConfig
+
+---data
+_defaults:
+  host: 0.0.0.0
+  timeout: 30
+  tls:
+    enabled: false
+
+api <EndpointConfig>:
+  host: $._defaults.host        # scalar copied from _defaults
+  port: 8080
+  admin_port: .port             # sibling ref: copies api.port (8080)
+  timeout: $._defaults.timeout  # scalar copied from _defaults
+  tls: $._defaults.tls          # entire sub-object copied from _defaults
+
+worker <EndpointConfig>:
+  host: $._defaults.host
+  port: 9000
+  admin_port: .port             # sibling ref: copies worker.port (9000)
+  timeout: $._defaults.timeout
+  tls: $.api.tls                # reuses api's tls (which was itself a reference)

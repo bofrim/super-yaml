@@ -788,20 +788,49 @@ Use `from_enum: TypeName` to validate a captured string against a named enum typ
 
 `defaults` fills properties not matched by capture groups.
 
+### `as_string` — Object-to-string serialization
+
+Object types can declare an `as_string` template that describes how to render the object as a string. The template uses `{{property_name}}` placeholders that are replaced with the corresponding property values at code-generation time.
+
+```yaml
+---schema
+Semver:
+  type: object
+  as_string: "{{major}}.{{minor}}.{{patch}}"
+  properties:
+    major: integer
+    minor: integer
+    patch: integer
+```
+
+Once defined:
+
+- **Type compatibility**: a `Semver` object can be used anywhere a `string` is expected. For example, if a parent schema declares `version: string`, you can hint the data value as `version <Semver>:` and the type checker will accept it.
+- **Rust codegen**: generates `impl std::fmt::Display for Semver`, giving you a free `.to_string()` call.
+- **TypeScript codegen**: generates a standalone `semverToString(semver: Semver): string` function using a template literal.
+
+Rules:
+- Only allowed on `type: object` schemas.
+- The value must be a non-empty string.
+- Every `{{placeholder}}` must reference a property declared in `properties`.
+- Only include required properties in the template — optional (`?`) properties would render as their Rust/TypeScript `Option` representation rather than their inner value.
+
+`as_string` and `constructors` are natural inverses: constructors parse strings into objects, `as_string` serializes objects back to strings.
+
 ### Complete schema keyword reference
 
 
-| Category   | Keywords                                                         |
-| ---------- | ---------------------------------------------------------------- |
-| Common     | `type`, `enum`                                                   |
-| Numeric    | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`     |
-| String     | `minLength`, `maxLength`, `pattern`                              |
-| Object     | `properties`, `values`, `required`, `optional`, `constructors`   |
-| Array      | `items`, `minItems`, `maxItems`                                  |
-| Validation | `constraints`                                                    |
-| Union      | `tag`, `tag_required`, `options` (on `type: union`)              |
-| Versioning | `field_number`, `since`, `deprecated`, `removed` (on properties) |
-| Mutability | `mutability` (`frozen`, `monotone_increase`, `replace`)          |
+| Category   | Keywords                                                                  |
+| ---------- | ------------------------------------------------------------------------- |
+| Common     | `type`, `enum`                                                            |
+| Numeric    | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`              |
+| String     | `minLength`, `maxLength`, `pattern`                                       |
+| Object     | `properties`, `values`, `required`, `optional`, `constructors`, `as_string` |
+| Array      | `items`, `minItems`, `maxItems`                                           |
+| Validation | `constraints`                                                             |
+| Union      | `tag`, `tag_required`, `options` (on `type: union`)                       |
+| Versioning | `field_number`, `since`, `deprecated`, `removed` (on properties)         |
+| Mutability | `mutability` (`frozen`, `monotone_increase`, `replace`)                   |
 
 
 ---
@@ -876,6 +905,68 @@ dsn <string>: "postgres://${env.DB_HOST}:${port}/app"
 ```
 
 If the entire string is exactly one interpolation (`"${expr}"`), the result preserves the native type. Otherwise, all segments are concatenated into a string.
+
+### Direct data references
+
+A scalar value that starts with `$.` or `.` is a **direct data reference** — it copies another value without requiring an expression (`=`). References are resolved after the document is fully loaded, so any resolved data value can be referenced.
+
+Two forms are supported:
+
+- `$.path.to.value` — **file-scope**: resolves from the document root.
+- `.sibling_key` — **current-scope**: resolves relative to the immediate parent object.
+
+Both forms can copy scalars **or** entire sub-objects (the copied subtree is deep-cloned into the target).
+
+```yaml
+---data
+_defaults:
+  host: 0.0.0.0
+  timeout: 30
+  tls:
+    enabled: false
+
+api <EndpointConfig>:
+  host: $._defaults.host        # scalar copied from _defaults (file-scope)
+  port: 8080
+  admin_port: .port             # sibling ref: copies api.port → 8080
+  timeout: $._defaults.timeout  # scalar copied from _defaults (file-scope)
+  tls: $._defaults.tls          # entire sub-object copied from _defaults
+
+worker <EndpointConfig>:
+  host: $._defaults.host
+  port: 9000
+  admin_port: .port             # sibling ref: copies worker.port → 9000
+  timeout: $._defaults.timeout
+  tls: $.api.tls                # reuses api's tls sub-object (file-scope)
+```
+
+Compiles to:
+
+```json
+{
+  "api": {
+    "admin_port": 8080,
+    "host": "0.0.0.0",
+    "port": 8080,
+    "timeout": 30,
+    "tls": { "enabled": false }
+  },
+  "worker": {
+    "admin_port": 9000,
+    "host": "0.0.0.0",
+    "port": 9000,
+    "timeout": 30,
+    "tls": { "enabled": false }
+  }
+}
+```
+
+**Rules:**
+
+- Sibling references (`.key`) only look in the direct parent object — they do not walk up the tree.
+- References to private keys (`_`-prefixed) are valid within the same file; private data is stripped from output but can seed other values via references.
+- Circular references are detected and rejected.
+- Type hints and constraints are validated on the resolved value, not the reference itself.
 
 ### Private keys
 
@@ -2023,6 +2114,7 @@ let compiled = compile_document(input, &env)?;
 8. **Accessing env without `--allow-env`**: The CLI blocks all environment access by default. Pass `--allow-env KEY` for each variable.
 9. **Import alias conflicts**: Each import alias must be unique. Imported type names are prefixed with the alias (`shared.Port`), not used bare.
 10. **Tabs in indentation**: The parser only supports spaces for indentation, not tabs.
+11. **Confusing references with expressions**: `$.path` and `.sibling` are direct data references (no `=` prefix). Wrapping them in `"=..."` makes them expression variables, not reference syntax — use the bare form for copies and `"=..."` only when you need arithmetic or function calls.
 
 ---
 
@@ -2094,13 +2186,14 @@ ObjectType:                                # Object type
     type: ValueType
   constraints:                             # Cross-field constraints
     - "prop_a <= prop_b"
-  constructors:                            # String constructors
+  constructors:                            # String constructors (string → object)
     name:
       regex: '^pattern$'
       map:
         field: { group: capture, decode: integer }
       defaults:
         field: value
+  as_string: "{{prop_a}}-{{prop_b}}"      # Object-to-string template (object → string)
 
 ArrayType:                                 # Array type
   type: array
@@ -2114,6 +2207,8 @@ key <string>: literal                      # Built-in type hint
 derived <integer>: "=a + b"               # Expression
 interpolated <string>: "prefix ${a} suffix"  # Interpolation
 env_value <string>: "${env.VAR_NAME}"      # Environment reference
+ref_root: $.path.to.value                 # File-scope direct reference (from document root)
+ref_sibling: .sibling_key                 # Current-scope direct reference (from parent object)
 _private_key: internal_only               # Private (stripped from output)
 frozen_key^: 9999                          # Instance-level freeze (^ stripped from output key)
 

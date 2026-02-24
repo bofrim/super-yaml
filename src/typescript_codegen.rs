@@ -614,7 +614,56 @@ fn render_object_interface(
     }
 
     out.push('}');
+
+    if let Some(template) = schema_obj.get("as_string").and_then(JsonValue::as_str) {
+        out.push('\n');
+        out.push('\n');
+        out.push_str(&render_to_string_fn(name, template));
+    }
+
     out
+}
+
+/// Generates a `{camelName}ToString` function for types that declare `as_string`.
+fn render_to_string_fn(name: &str, template: &str) -> String {
+    let fn_name = format!("{}ToString", to_camel_case_ts(name));
+    let param_name = to_camel_case_ts(name);
+
+    // Build a template literal by replacing {{prop}} with ${param.prop}.
+    let mut ts_template = String::new();
+    let mut remaining = template;
+    while let Some(open) = remaining.find("{{") {
+        let literal = &remaining[..open];
+        ts_template.push_str(&escape_ts_template_literal(literal));
+        remaining = &remaining[open + 2..];
+        if let Some(close) = remaining.find("}}") {
+            let placeholder = remaining[..close].trim();
+            let field = render_property_name(placeholder);
+            // Use dot notation for valid identifiers, bracket for quoted ones.
+            if field.starts_with('"') {
+                ts_template.push_str(&format!("${{{param_name}[{field}]}}"));
+            } else {
+                ts_template.push_str(&format!("${{{param_name}.{field}}}"));
+            }
+            remaining = &remaining[close + 2..];
+        }
+    }
+    ts_template.push_str(&escape_ts_template_literal(remaining));
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "export function {fn_name}({param_name}: {name}): string {{\n"
+    ));
+    out.push_str(&format!("  return `{ts_template}`;\n"));
+    out.push_str("}\n");
+    out
+}
+
+/// Escapes literal text for embedding inside a TypeScript template literal.
+fn escape_ts_template_literal(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace("${", "\\${")
 }
 
 fn required_property_set(

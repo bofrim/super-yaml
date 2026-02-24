@@ -22,6 +22,7 @@ use crate::{parse_document_or_manifest, SyamlError};
 pub fn generate_html_docs(input: &str) -> Result<String, SyamlError> {
     let parsed = parse_document_or_manifest(input)?;
     let raw_data = extract_raw_data_section(input);
+    let raw_schema = extract_raw_schema_section(input);
     let file_title = "SYAML Documentation";
     Ok(assemble_page(
         file_title,
@@ -30,6 +31,7 @@ pub fn generate_html_docs(input: &str) -> Result<String, SyamlError> {
         parsed.functional.as_ref(),
         Some(&parsed.data.value),
         raw_data.as_deref(),
+        raw_schema.as_deref(),
     ))
 }
 
@@ -44,6 +46,7 @@ pub fn generate_html_docs_from_path(path: impl AsRef<Path>) -> Result<String, Sy
     })?;
     let parsed = parse_document_or_manifest(&input)?;
     let raw_data = extract_raw_data_section(&input);
+    let raw_schema = extract_raw_schema_section(&input);
     let file_title = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -56,6 +59,7 @@ pub fn generate_html_docs_from_path(path: impl AsRef<Path>) -> Result<String, Sy
         parsed.functional.as_ref(),
         Some(&parsed.data.value),
         raw_data.as_deref(),
+        raw_schema.as_deref(),
         base_dir,
     ))
 }
@@ -69,6 +73,7 @@ fn assemble_page(
     functional: Option<&FunctionalDoc>,
     data: Option<&JsonValue>,
     raw_data: Option<&str>,
+    raw_schema: Option<&str>,
 ) -> String {
     assemble_page_with_paths(
         title,
@@ -77,6 +82,7 @@ fn assemble_page(
         functional,
         data,
         raw_data,
+        raw_schema,
         Path::new("."),
     )
 }
@@ -88,6 +94,7 @@ fn assemble_page_with_paths(
     functional: Option<&FunctionalDoc>,
     data: Option<&JsonValue>,
     raw_data: Option<&str>,
+    raw_schema: Option<&str>,
     _base_dir: &Path,
 ) -> String {
     // Build import alias → relative html path map for cross-linking
@@ -113,18 +120,24 @@ fn assemble_page_with_paths(
         })
         .unwrap_or_default();
 
+    let type_sources: BTreeMap<String, String> = raw_schema
+        .map(extract_schema_type_blocks)
+        .unwrap_or_default();
+
     let meta_html = meta
         .map(|m| render_meta_section(m, &import_html_paths))
         .unwrap_or_default();
-    let schema_html = render_schema_section(schema, &import_html_paths);
+    let schema_html = render_schema_section(schema, &import_html_paths, &type_sources);
     let functional_html = functional
         .map(|f| render_functional_section(f, &import_html_paths))
         .unwrap_or_default();
 
-    // Only render data section if the value is non-null and non-empty
+    // Only render data section if the value is non-null and non-empty.
+    // For the single-file path there are no cross-file import links, so pass
+    // the same import_html_paths map (which maps alias → sibling .html paths).
     let data_html = data
         .filter(|v| !is_empty_data(v))
-        .map(|v| render_data_section(v, raw_data))
+        .map(|v| render_data_section(v, raw_data, &import_html_paths))
         .unwrap_or_default();
 
     let nav_items = build_nav_items(schema, functional, data.filter(|v| !is_empty_data(v)));
@@ -168,6 +181,21 @@ function toggleJsonView() {{
     syaml.style.display = 'none';
     json.style.display  = 'block';
     btn.textContent = 'Show SYAML';
+  }}
+}}
+function toggleTypeSource(id) {{
+  var rendered = document.getElementById('type-rendered-' + id);
+  var source   = document.getElementById('type-source-'   + id);
+  var btn      = document.getElementById('type-toggle-'   + id);
+  var showingSource = source.style.display !== 'none';
+  if (showingSource) {{
+    source.style.display   = 'none';
+    rendered.style.display = 'block';
+    btn.textContent = 'Show source';
+  }} else {{
+    rendered.style.display = 'none';
+    source.style.display   = 'block';
+    btn.textContent = 'Show rendered';
   }}
 }}
 </script>
@@ -436,15 +464,44 @@ fn split_inline_comment(text: &str) -> (&str, &str) {
 
 /// Apply syntax highlighting to a raw SYAML data-section body.
 /// Returns an HTML string with `<span>` tags; suitable for use inside `<pre><code>`.
-fn highlight_syaml_source(source: &str) -> String {
+/// Render a `<alias.TypeName>` or `<LocalType>` type hint as a linked token.
+///
+/// • `<alias.TypeName>` → links to `{import_html_paths[alias]}#type-TypeName`
+/// • `<LocalType>`      → links to `#type-LocalType` (same-page anchor)
+///
+/// Falls back to a plain `hl-type` span when the alias is unknown.
+fn hl_type_hint(inner: &str, import_html_paths: &BTreeMap<String, String>) -> String {
+    let display = format!("&lt;{}&gt;", html_escape(inner));
+    let href = if let Some(dot) = inner.find('.') {
+        let alias = &inner[..dot];
+        let type_name = &inner[dot + 1..];
+        import_html_paths
+            .get(alias)
+            .map(|page| format!("{}#type-{}", page, html_escape(type_name)))
+    } else {
+        // Local type — anchor on the same page
+        Some(format!("#type-{}", html_escape(inner)))
+    };
+
+    match href {
+        Some(h) => format!(
+            r#"<a href="{href}" class="hl-type">{display}</a>"#,
+            href = h,
+            display = display
+        ),
+        None => hl_span("hl-type", &display),
+    }
+}
+
+fn highlight_syaml_source(source: &str, import_html_paths: &BTreeMap<String, String>) -> String {
     source
         .lines()
-        .map(highlight_syaml_line)
+        .map(|line| highlight_syaml_line(line, import_html_paths))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn highlight_syaml_line(line: &str) -> String {
+fn highlight_syaml_line(line: &str, import_html_paths: &BTreeMap<String, String>) -> String {
     // Preserve leading indentation verbatim.
     let indent_len = line.len() - line.trim_start().len();
     let indent = &line[..indent_len];
@@ -492,7 +549,6 @@ fn highlight_syaml_line(line: &str) -> String {
         (None, None) => {
             // No separator at all: the whole thing is a bare key (sub-object on next lines)
             // or a plain scalar that didn't start with a quote.
-            // Treat as plain value if it doesn't look like an identifier.
             let is_identifier = content
                 .chars()
                 .all(|c| c.is_alphanumeric() || c == '_' || c == '-');
@@ -518,11 +574,12 @@ fn highlight_syaml_line(line: &str) -> String {
 
     let rest = &content[key_end..];
 
-    // Optional type hint  <alias.TypeName>
+    // Optional type hint  <alias.TypeName>  or  <LocalType>
     let rest = if rest.starts_with('<') {
         match rest.find('>') {
             Some(end) => {
-                out.push_str(&hl_span("hl-type", &html_escape(&rest[..=end])));
+                let inner = &rest[1..end]; // content between < and >
+                out.push_str(&hl_type_hint(inner, import_html_paths));
                 &rest[end + 1..]
             }
             None => {
@@ -574,15 +631,63 @@ fn extract_raw_data_section(content: &str) -> Option<String> {
         .map(|s| s.body)
 }
 
+fn extract_raw_schema_section(content: &str) -> Option<String> {
+    let (_, sections) = scan_sections(content).ok()?;
+    sections
+        .into_iter()
+        .find(|s| s.name == "schema")
+        .map(|s| s.body)
+}
+
+/// Split a raw `---schema` section body into per-type raw YAML blocks.
+///
+/// Each top-level key (starting at column 0, not a comment) begins a new type
+/// block.  The block includes the `TypeName:` header line plus all indented
+/// lines that follow.  Returns a map of type-name → raw block text.
+fn extract_schema_type_blocks(schema_body: &str) -> BTreeMap<String, String> {
+    let mut blocks: BTreeMap<String, String> = BTreeMap::new();
+    let mut current_name: Option<String> = None;
+    let mut current_lines: Vec<&str> = Vec::new();
+
+    for line in schema_body.lines() {
+        let is_top_level = !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && !line.trim().is_empty()
+            && !line.trim_start().starts_with('#');
+
+        if is_top_level {
+            if let Some(name) = current_name.take() {
+                blocks.insert(name, current_lines.join("\n").trim_end().to_string());
+            }
+            // Strip trailing colon to get the bare type name.
+            let type_name = line.trim_end().trim_end_matches(':').to_string();
+            current_lines = vec![line];
+            current_name = Some(type_name);
+        } else if current_name.is_some() {
+            current_lines.push(line);
+        }
+    }
+    if let Some(name) = current_name.take() {
+        blocks.insert(name, current_lines.join("\n").trim_end().to_string());
+    }
+    blocks
+}
+
 /// Renders the `---data` section.
 ///
 /// The raw SYAML source is always shown. Clicking "Show JSON" opens the
 /// compiled JSON panel to the right of the SYAML block in a side-by-side layout.
-fn render_data_section(data: &JsonValue, raw_syaml: Option<&str>) -> String {
+fn render_data_section(
+    data: &JsonValue,
+    raw_syaml: Option<&str>,
+    import_html_paths: &BTreeMap<String, String>,
+) -> String {
     let pretty_json = serde_json::to_string_pretty(data).unwrap_or_else(|_| "{}".to_string());
 
     let syaml_inner = match raw_syaml {
-        Some(raw) if !raw.trim().is_empty() => highlight_syaml_source(raw.trim_end()),
+        Some(raw) if !raw.trim().is_empty() => {
+            highlight_syaml_source(raw.trim_end(), import_html_paths)
+        }
         _ => String::new(),
     };
 
@@ -607,6 +712,7 @@ fn render_data_section(data: &JsonValue, raw_syaml: Option<&str>) -> String {
 fn render_schema_section(
     schema: &SchemaDoc,
     import_html_paths: &BTreeMap<String, String>,
+    type_sources: &BTreeMap<String, String>,
 ) -> String {
     if schema.types.is_empty() {
         return String::new();
@@ -618,12 +724,14 @@ fn render_schema_section(
     for (name, type_val) in &schema.types {
         let extends_parent = schema.extends.get(name);
         let constraints = schema.type_constraints.get(name);
+        let raw_source = type_sources.get(name.as_str()).map(|s| s.as_str());
         html.push_str(&render_type_card(
             name,
             type_val,
             extends_parent.map(|s| s.as_str()),
             constraints,
             import_html_paths,
+            raw_source,
         ));
     }
 
@@ -637,11 +745,13 @@ fn render_type_card(
     extends_parent: Option<&str>,
     constraints: Option<&BTreeMap<String, Vec<String>>>,
     import_html_paths: &BTreeMap<String, String>,
+    raw_source: Option<&str>,
 ) -> String {
     let mut html = String::new();
+    let card_id = html_escape(name);
     html.push_str(&format!(
         "<div class=\"type-card\" id=\"type-{id}\">\n",
-        id = html_escape(name)
+        id = card_id
     ));
 
     // Card header
@@ -656,10 +766,24 @@ fn render_type_card(
             render_type_ref(parent, import_html_paths)
         ));
     }
-    // Show the kind badge
+    // Kind badge
     let kind = detect_type_kind(type_val);
     html.push_str(&format!("<span class=\"kind-badge\">{kind}</span>\n"));
+    // Toggle button (only when we have source)
+    if raw_source.is_some() {
+        html.push_str(&format!(
+            "<button class=\"type-source-toggle\" id=\"type-toggle-{id}\" \
+             onclick=\"toggleTypeSource('{id}')\">Show source</button>\n",
+            id = card_id
+        ));
+    }
     html.push_str("</div>\n");
+
+    // --- Rendered view ---
+    html.push_str(&format!(
+        "<div id=\"type-rendered-{id}\">\n",
+        id = card_id
+    ));
 
     // Description if present
     if let Some(desc) = type_val.get("description").and_then(|v| v.as_str()) {
@@ -685,7 +809,21 @@ fn render_type_card(
         html.push_str(&render_inline_constraints(c_val));
     }
 
-    html.push_str("</div>\n");
+    html.push_str("</div>\n"); // end type-rendered
+
+    // --- Source code view (hidden by default) ---
+    if let Some(src) = raw_source {
+        let highlighted = highlight_syaml_source(src, import_html_paths);
+        html.push_str(&format!(
+            "<div id=\"type-source-{id}\" class=\"type-source-view\" style=\"display:none\">\
+             <pre class=\"syaml-source\"><code>{highlighted}</code></pre>\
+             </div>\n",
+            id = card_id,
+            highlighted = highlighted,
+        ));
+    }
+
+    html.push_str("</div>\n"); // end type-card
     html
 }
 
@@ -1139,6 +1277,42 @@ body {
 .nav-home:hover { color: #0969da; background: #f6f8fa; }
 .nav-home svg { flex-shrink: 0; }
 
+/* "Files" section in the sidebar of module pages */
+.nav-files {
+  list-style: none;
+  margin-bottom: 4px;
+}
+
+.nav-files li a {
+  display: block;
+  padding: 3px 16px 3px 24px;
+  color: #0969da;
+  text-decoration: none;
+  font-size: 13px;
+  font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+}
+
+.nav-files li a:hover { background: #f6f8fa; }
+
+/* Current page entry in the files list — shown as plain text, not a link */
+li.nav-files-current {
+  padding: 3px 16px 3px 24px;
+  font-size: 13px;
+  font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+  font-weight: 700;
+  color: #24292f;
+}
+
+/* Subtle page-title label above the in-page nav anchors */
+.nav-title-sub {
+  font-size: 11px;
+  color: #57606a;
+  padding: 8px 16px 2px;
+  word-break: break-all;
+  border-top: 1px solid #d0d7de;
+  margin-top: 4px;
+}
+
 /* Directory group label in the sidebar (index page) */
 #sidebar li.nav-group-label {
   font-size: 11px;
@@ -1247,6 +1421,27 @@ main {
   border-radius: 4px;
   background: #ffebe9;
   color: #d73a49;
+}
+
+.type-source-toggle {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  color: #24292f;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.type-source-toggle:hover {
+  background: #eaeef2;
+}
+
+.type-source-view {
+  margin-top: 8px;
 }
 
 .type-desc {
@@ -1385,7 +1580,8 @@ pre.syaml-source code {
 /* ── SYAML syntax-highlighting token colours ── */
 .hl-comment { color: #6e7781; font-style: italic; }
 .hl-key     { color: #0550ae; }
-.hl-type    { color: #8250df; }
+.hl-type, a.hl-type { color: #8250df; text-decoration: none; }
+a.hl-type:hover { text-decoration: underline; }
 .hl-string  { color: #116329; }
 .hl-number  { color: #953800; }
 .hl-unit    { color: #953800; opacity: 0.75; }
@@ -1578,6 +1774,25 @@ pub fn generate_html_docs_site(
         path_to_rel_html.insert(canonical.clone(), html_rel);
     }
 
+    // Group html_rel paths by parent directory so each page can show a
+    // "Files" sidebar section linking to its module siblings.
+    let mut dir_to_pages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for html_rel in path_to_rel_html.values() {
+        let dir = Path::new(html_rel)
+            .parent()
+            .and_then(|p| if p == Path::new("") { None } else { p.to_str() })
+            .unwrap_or("");
+        if !dir.is_empty() {
+            dir_to_pages
+                .entry(dir.to_string())
+                .or_default()
+                .push(html_rel.clone());
+        }
+    }
+    for pages in dir_to_pages.values_mut() {
+        pages.sort();
+    }
+
     // Generate HTML for each file
     let mut index_links: Vec<(String, String)> = Vec::new(); // (html_rel_path, title)
 
@@ -1662,9 +1877,44 @@ pub fn generate_html_docs_site(
             Some(data_val)
         };
         let raw_data = extract_raw_data_section(&content);
+        let raw_schema = extract_raw_schema_section(&content);
 
         // Compute the relative path from this page back to index.html.
         let index_href = compute_relative_html_path(&current_html_dir, Path::new("index.html"));
+
+        // Build the "Files" sidebar list: sibling pages in the same module directory.
+        // Each entry is (relative_href, display_stem); href is empty for the current page.
+        let page_dir = Path::new(&html_rel)
+            .parent()
+            .and_then(|p| if p == Path::new("") { None } else { p.to_str() })
+            .unwrap_or("")
+            .to_string();
+        let module_files: Vec<(String, String)> = dir_to_pages
+            .get(&page_dir)
+            .map(|siblings| {
+                siblings
+                    .iter()
+                    .map(|sibling_rel| {
+                        let stem = Path::new(sibling_rel)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(sibling_rel.as_str())
+                            .to_string();
+                        let href = if sibling_rel == &html_rel {
+                            String::new() // current page — no link
+                        } else {
+                            // Same directory: just the filename is the relative href.
+                            Path::new(sibling_rel)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(sibling_rel.as_str())
+                                .to_string()
+                        };
+                        (href, stem)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let html = assemble_page_with_import_links(
             file_title,
@@ -1675,6 +1925,8 @@ pub fn generate_html_docs_site(
             &import_html_paths,
             Some(&index_href),
             raw_data.as_deref(),
+            raw_schema.as_deref(),
+            &module_files,
         );
 
         // Use the full relative path (without .html) as the index label so that
@@ -1707,19 +1959,26 @@ fn assemble_page_with_import_links(
     import_html_paths: &BTreeMap<String, String>,
     index_href: Option<&str>,
     raw_data: Option<&str>,
+    raw_schema: Option<&str>,
+    module_files: &[(String, String)], // (relative_href, display_stem); href="" = current page
 ) -> String {
+    let type_sources: BTreeMap<String, String> = raw_schema
+        .map(extract_schema_type_blocks)
+        .unwrap_or_default();
+
     let meta_html = meta
         .map(|m| render_meta_section(m, import_html_paths))
         .unwrap_or_default();
-    let schema_html = render_schema_section(schema, import_html_paths);
+    let schema_html = render_schema_section(schema, import_html_paths, &type_sources);
     let functional_html = functional
         .map(|f| render_functional_section(f, import_html_paths))
         .unwrap_or_default();
 
-    // Only render data section if the value is non-null and non-empty
+    // Only render data section if the value is non-null and non-empty.
+    // Pass import_html_paths so type hints in the SYAML source become links.
     let data_html = data
         .filter(|v| !is_empty_data(v))
-        .map(|v| render_data_section(v, raw_data))
+        .map(|v| render_data_section(v, raw_data, import_html_paths))
         .unwrap_or_default();
 
     let nav_items = build_nav_items(schema, functional, data.filter(|v| !is_empty_data(v)));
@@ -1736,6 +1995,31 @@ fn assemble_page_with_import_links(
         None => String::new(),
     };
 
+    // "Files" sidebar section — links to sibling pages in the same module directory.
+    let files_nav = if !module_files.is_empty() {
+        let mut items = String::new();
+        for (href, name) in module_files {
+            if href.is_empty() {
+                items.push_str(&format!(
+                    "    <li class=\"nav-files-current\">{name}</li>\n",
+                    name = html_escape(name)
+                ));
+            } else {
+                items.push_str(&format!(
+                    "    <li><a href=\"{href}\">{name}</a></li>\n",
+                    href = html_escape(href),
+                    name = html_escape(name)
+                ));
+            }
+        }
+        format!(
+            "  <div class=\"nav-section\">Files</div>\n  <ul class=\"nav-files\">\n{items}  </ul>\n",
+            items = items
+        )
+    } else {
+        String::new()
+    };
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1749,7 +2033,8 @@ fn assemble_page_with_import_links(
 </head>
 <body>
 <nav id="sidebar">
-{home_link}  <div class="nav-title">{title}</div>
+{home_link}{files_nav}  <div class="nav-section">On this page</div>
+  <div class="nav-title-sub">{title}</div>
   <ul>
 {nav_items}
   </ul>
@@ -1775,6 +2060,21 @@ function toggleJsonView() {{
     syaml.style.display = 'none';
     json.style.display  = 'block';
     btn.textContent = 'Show SYAML';
+  }}
+}}
+function toggleTypeSource(id) {{
+  var rendered = document.getElementById('type-rendered-' + id);
+  var source   = document.getElementById('type-source-'   + id);
+  var btn      = document.getElementById('type-toggle-'   + id);
+  var showingSource = source.style.display !== 'none';
+  if (showingSource) {{
+    source.style.display   = 'none';
+    rendered.style.display = 'block';
+    btn.textContent = 'Show source';
+  }} else {{
+    rendered.style.display = 'none';
+    source.style.display   = 'block';
+    btn.textContent = 'Show rendered';
   }}
 }}
 </script>
