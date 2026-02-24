@@ -1,0 +1,12 @@
+{
+  "default_tz": {
+    "abbreviation": "UTC",
+    "tz_identifier": "UTC",
+    "offset": "+00:00"
+  },
+  "west_coast_tz": {
+    "abbreviation": "PST",
+    "tz_identifier": "America/Los_Angeles",
+    "offset": "-08:00"
+  }
+}

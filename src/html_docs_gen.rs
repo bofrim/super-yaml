@@ -3,7 +3,7 @@
 //! Produces a self-contained HTML page documenting the schema types, data
 //! entries, and functional definitions found in a SYAML document.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -909,18 +909,218 @@ fn is_deprecated(val: &JsonValue) -> bool {
 }
 
 fn render_enum_type(val: &JsonValue) -> String {
-    let Some(variants) = val.get("enum").and_then(|e| e.as_array()) else {
+    let Some(enum_value) = val.get("enum") else {
         return String::new();
     };
-    let mut html = String::from("<ul class=\"enum-list\">\n");
-    for v in variants {
-        html.push_str(&format!(
-            "<li><code>{}</code></li>\n",
-            html_escape(&json_value_display(v))
-        ));
+
+    if let Some(variants) = enum_value.as_array() {
+        let mut html = String::from("<ul class=\"enum-list\">\n");
+        for v in variants {
+            html.push_str(&format!(
+                "<li><code>{}</code></li>\n",
+                html_escape(&json_value_display(v))
+            ));
+        }
+        html.push_str("</ul>\n");
+        return html;
     }
-    html.push_str("</ul>\n");
-    html
+
+    if let Some(entries) = enum_value.as_object() {
+        let all_object_values = entries.values().all(|v| v.as_object().is_some());
+        if !all_object_values {
+            let mut html = String::from("<ul class=\"enum-list\">\n");
+            for (k, v) in entries {
+                html.push_str(&format!(
+                    "<li><code>{}</code>: <code>{}</code></li>\n",
+                    html_escape(k),
+                    html_escape(&json_value_display(v))
+                ));
+            }
+            html.push_str("</ul>\n");
+            return html;
+        }
+
+        let mut columns: BTreeSet<Vec<String>> = BTreeSet::new();
+        for value in entries.values() {
+            if let Some(obj) = value.as_object() {
+                let mut top_keys: Vec<String> = obj.keys().cloned().collect();
+                top_keys.sort();
+                for key in top_keys {
+                    let mut prefix = vec![key.clone()];
+                    collect_enum_leaf_paths(
+                        obj.get(&key).unwrap_or(&JsonValue::Null),
+                        &mut prefix,
+                        1,
+                        &mut columns,
+                    );
+                }
+            }
+        }
+        let columns: Vec<Vec<String>> = columns.into_iter().collect();
+        let header_tree = build_enum_header_tree(&columns);
+        let max_depth = columns
+            .iter()
+            .map(|path| path.len())
+            .max()
+            .unwrap_or(1)
+            .max(1);
+
+        let mut html = String::from("<table class=\"prop-table enum-table\">\n");
+        html.push_str("<thead>\n");
+        for level in 1..=max_depth {
+            html.push_str("<tr>");
+            if level == 1 {
+                html.push_str(&format!("<th rowspan=\"{max_depth}\">Key</th>"));
+            }
+            let mut cells = Vec::new();
+            collect_enum_header_cells(
+                &header_tree,
+                1,
+                level,
+                max_depth,
+                &mut cells,
+            );
+            for cell in cells {
+                html.push_str(&format!(
+                    "<th colspan=\"{}\" rowspan=\"{}\">{}</th>",
+                    cell.colspan,
+                    cell.rowspan,
+                    html_escape(&cell.label)
+                ));
+            }
+            html.push_str("</tr>\n");
+        }
+        html.push_str("</thead>\n<tbody>\n");
+
+        let mut entry_keys: Vec<String> = entries.keys().cloned().collect();
+        entry_keys.sort();
+        for key in entry_keys {
+            let value = entries.get(&key).expect("entry key collected from map");
+            html.push_str(&format!(
+                "<tr><td><code>{}</code></td>",
+                html_escape(&key)
+            ));
+            for path in &columns {
+                let cell = get_enum_path_value(value, path)
+                    .map(json_value_display)
+                    .unwrap_or_else(String::new);
+                html.push_str(&format!("<td><code>{}</code></td>", html_escape(&cell)));
+            }
+            html.push_str("</tr>\n");
+        }
+        html.push_str("</tbody></table>\n");
+        return html;
+    }
+
+    String::new()
+}
+
+#[derive(Default)]
+struct EnumHeaderNode {
+    children: BTreeMap<String, EnumHeaderNode>,
+}
+
+struct EnumHeaderCell {
+    label: String,
+    colspan: usize,
+    rowspan: usize,
+}
+
+fn collect_enum_leaf_paths(
+    value: &JsonValue,
+    prefix: &mut Vec<String>,
+    level: usize,
+    out: &mut BTreeSet<Vec<String>>,
+) {
+    const MAX_EXPAND_DEPTH: usize = 3;
+    if level >= MAX_EXPAND_DEPTH {
+        out.insert(prefix.clone());
+        return;
+    }
+    let Some(obj) = value.as_object() else {
+        out.insert(prefix.clone());
+        return;
+    };
+    if obj.is_empty() {
+        out.insert(prefix.clone());
+        return;
+    }
+
+    let mut keys: Vec<String> = obj.keys().cloned().collect();
+    keys.sort();
+    for key in keys {
+        prefix.push(key.clone());
+        collect_enum_leaf_paths(
+            obj.get(&key).unwrap_or(&JsonValue::Null),
+            prefix,
+            level + 1,
+            out,
+        );
+        prefix.pop();
+    }
+}
+
+fn build_enum_header_tree(columns: &[Vec<String>]) -> EnumHeaderNode {
+    let mut root = EnumHeaderNode::default();
+    for path in columns {
+        let mut current = &mut root;
+        for segment in path {
+            current = current
+                .children
+                .entry(segment.clone())
+                .or_insert_with(EnumHeaderNode::default);
+        }
+    }
+    root
+}
+
+fn enum_leaf_count(node: &EnumHeaderNode) -> usize {
+    if node.children.is_empty() {
+        1
+    } else {
+        node.children.values().map(enum_leaf_count).sum()
+    }
+}
+
+fn collect_enum_header_cells(
+    node: &EnumHeaderNode,
+    current_level: usize,
+    target_level: usize,
+    max_depth: usize,
+    out: &mut Vec<EnumHeaderCell>,
+) {
+    for (label, child) in &node.children {
+        if current_level == target_level {
+            let has_children = !child.children.is_empty();
+            let colspan = if has_children { enum_leaf_count(child) } else { 1 };
+            let rowspan = if has_children {
+                1
+            } else {
+                max_depth.saturating_sub(target_level) + 1
+            };
+            out.push(EnumHeaderCell {
+                label: label.clone(),
+                colspan,
+                rowspan,
+            });
+        } else if !child.children.is_empty() {
+            collect_enum_header_cells(
+                child,
+                current_level + 1,
+                target_level,
+                max_depth,
+                out,
+            );
+        }
+    }
+}
+
+fn get_enum_path_value<'a>(root: &'a JsonValue, path: &[String]) -> Option<&'a JsonValue> {
+    let mut current = root;
+    for segment in path {
+        current = current.as_object()?.get(segment)?;
+    }
+    Some(current)
 }
 
 fn render_array_type(val: &JsonValue, import_html_paths: &BTreeMap<String, String>) -> String {
@@ -2296,6 +2496,89 @@ Status:
         assert!(html.contains("id=\"type-Status\""));
         assert!(html.contains("active"));
         assert!(html.contains("enum"));
+    }
+
+    #[test]
+    fn generates_html_with_keyed_object_enum_table() {
+        let input = r#"---!syaml/v0
+---schema
+TimezoneInfo:
+  type: object
+  properties:
+    tz_identifier: string
+    abbreviation: string
+    offset: string
+Timezone:
+  type: TimezoneInfo
+  enum:
+    UTC:
+      tz_identifier: UTC
+      abbreviation: UTC
+      offset: +00:00
+    LOS_ANGELES:
+      tz_identifier: America/Los_Angeles
+      abbreviation: PST
+      offset: -08:00
+---data
+{}
+"#;
+        let html = generate_html_docs(input).unwrap();
+        assert!(html.contains("id=\"type-Timezone\""));
+        assert!(html.contains("<th rowspan=\"1\">Key</th>"));
+        assert!(html.contains(">tz_identifier</th>"));
+        assert!(html.contains(">abbreviation</th>"));
+        assert!(html.contains(">offset</th>"));
+        assert!(html.contains("<code>UTC</code></td>"));
+        assert!(html.contains("<code>LOS_ANGELES</code></td>"));
+    }
+
+    #[test]
+    fn generates_html_with_nested_keyed_enum_grouped_headers_and_depth_cutoff() {
+        let input = r#"---!syaml/v0
+---schema
+Complex:
+  type: object
+  properties:
+    meta:
+      type: object
+      properties:
+        label: string
+    offset:
+      type: object
+      properties:
+        sdt:
+          type: object
+          properties:
+            sign: string
+            parts:
+              type: object
+        dst:
+          type: object
+          properties:
+            sign: string
+  enum:
+    A:
+      meta:
+        label: standard
+      offset:
+        sdt:
+          sign: "-"
+          parts:
+            hours: 8
+            minutes: 0
+        dst:
+          sign: "-"
+---data
+{}
+"#;
+        let html = generate_html_docs(input).unwrap();
+        assert!(html.contains("<th rowspan=\"3\">Key</th>"));
+        assert!(html.contains(">offset</th>"));
+        assert!(html.contains(">sdt</th>"));
+        assert!(html.contains(">dst</th>"));
+        // "parts" is level 3 and should contain JSON for deeper data.
+        assert!(html.contains(">parts</th>"));
+        assert!(html.contains("{&quot;hours&quot;:8,&quot;minutes&quot;:0}"));
     }
 
     #[test]

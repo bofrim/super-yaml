@@ -328,6 +328,8 @@ fn render_type_definition(
 
     let mut out = if is_union_schema(schema_obj) {
         render_union_alias(&ts_name, schema_obj, state)
+    } else if let Some(members) = collect_keyed_enum_members(schema_obj) {
+        render_keyed_enum_helpers(&ts_name, schema_obj, &members, state)
     } else if let Some(variants) = collect_string_enum_variants(schema_obj) {
         render_string_enum_alias(&ts_name, &variants)
     } else if is_object_schema(schema_obj) {
@@ -552,6 +554,24 @@ fn collect_string_enum_variants(schema_obj: &JsonMap<String, JsonValue>) -> Opti
     Some(out)
 }
 
+fn collect_keyed_enum_members(
+    schema_obj: &JsonMap<String, JsonValue>,
+) -> Option<Vec<(String, JsonValue)>> {
+    let enum_map = schema_obj.get("enum")?.as_object()?;
+    if enum_map.is_empty() {
+        return None;
+    }
+    if schema_obj.get("type").and_then(JsonValue::as_str).is_none() {
+        return None;
+    }
+    let mut members: Vec<(String, JsonValue)> = enum_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    members.sort_by(|a, b| a.0.cmp(&b.0));
+    Some(members)
+}
+
 fn is_object_schema(schema_obj: &JsonMap<String, JsonValue>) -> bool {
     match schema_obj.get("type").and_then(JsonValue::as_str) {
         Some("object") => true,
@@ -566,6 +586,52 @@ fn render_string_enum_alias(name: &str, variants: &[String]) -> String {
         members.push(format!("\"{}\"", escape_string(variant)));
     }
     format!("export type {name} = {};", members.join(" | "))
+}
+
+fn render_keyed_enum_helpers(
+    name: &str,
+    schema_obj: &JsonMap<String, JsonValue>,
+    members: &[(String, JsonValue)],
+    state: &mut RenderState,
+) -> String {
+    let base_type = schema_obj
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .map(|type_name| ts_type_for_type_name(type_name, schema_obj, state))
+        .unwrap_or_else(|| "unknown".to_string());
+    let key_type_name = format!("{name}Key");
+    let members_name = format!("{name}Members");
+    let getter_name = format!("get{name}");
+
+    let mut key_members = Vec::with_capacity(members.len());
+    for (key, _) in members {
+        key_members.push(format!("\"{}\"", escape_string(key)));
+    }
+
+    let mut value_lines = String::new();
+    for (key, value) in members {
+        let literal = ts_value_literal(value);
+        value_lines.push_str(&format!("  \"{}\": {},\n", escape_string(key), literal));
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!("export type {name} = {base_type};\n"));
+    out.push_str(&format!(
+        "export type {key_type_name} = {};\n\n",
+        key_members.join(" | ")
+    ));
+    out.push_str(&format!(
+        "export const {members_name}: Record<{key_type_name}, {name}> = {{\n{value_lines}}};\n\n"
+    ));
+    out.push_str(&format!(
+        "export function {getter_name}(key: {key_type_name}): {name} {{\n  return {members_name}[key];\n}}"
+    ));
+    out
+}
+
+fn ts_value_literal(value: &JsonValue) -> String {
+    let raw = serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_string());
+    raw.replace('\n', "\n  ")
 }
 
 fn render_object_interface(
@@ -920,8 +986,7 @@ pub fn generate_typescript_types_and_data_from_path(
     let type_names = build_type_name_map(&schemas.types);
 
     // Compile to get resolved data values.
-    let compiled =
-        crate::compile_document_from_path_with_fetch(path, env_provider, None, false)?;
+    let compiled = crate::compile_document_from_path_with_fetch(path, env_provider, None, false)?;
 
     // Render types (existing logic).
     let types_output = render_typescript_types(&schemas);
@@ -968,8 +1033,7 @@ fn render_typescript_data(
         let ts_type = data_ts_type(type_hint, value, type_names);
         let var_name = to_camel_case_ts(key);
         // JSON is valid TypeScript literal syntax.
-        let json_str = serde_json::to_string_pretty(value)
-            .unwrap_or_else(|_| "null".to_string());
+        let json_str = serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_string());
         out.push_str(&format!(
             "export const {var_name}: {ts_type} = {json_str};\n\n"
         ));
@@ -1025,7 +1089,12 @@ fn to_camel_case_ts(raw: &str) -> String {
             }
         }
     }
-    if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if out
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         out = format!("var{out}");
     }
     if is_typescript_keyword(&out) {

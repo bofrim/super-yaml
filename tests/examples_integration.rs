@@ -39,6 +39,7 @@ fn all_examples_compile_to_expected_json() {
         "template_service",
         "rest_api",
         "versioned_fields",
+        "keyed_enum_timezones",
     ];
 
     for case in cases {
@@ -73,6 +74,7 @@ fn all_examples_validate_successfully() {
         "template_service",
         "rest_api",
         "versioned_fields",
+        "keyed_enum_timezones",
     ];
 
     for case in cases {
@@ -156,7 +158,8 @@ fn generate_from_examples_match_expected() {
             });
 
             assert_eq!(
-                actual, expected,
+                actual,
+                expected,
                 "generate-from/{source_type}/{stem}: output does not match {}",
                 expected_path.display()
             );

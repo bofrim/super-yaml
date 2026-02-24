@@ -404,26 +404,52 @@ fn resolve_enum_type_values(
             enum_type_name, path
         ))
     })?;
-    let enum_values = enum_obj
-        .get("enum")
-        .and_then(JsonValue::as_array)
-        .ok_or_else(|| {
-            SyamlError::SchemaError(format!(
-                "referenced type '{}' at {} must declare an enum array",
-                enum_type_name, path
-            ))
-        })?;
+    let enum_values = enum_obj.get("enum").ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "referenced type '{}' at {} must declare an enum array or object",
+            enum_type_name, path
+        ))
+    })?;
     let mut out = HashSet::new();
-    for value in enum_values {
-        let Some(as_str) = value.as_str() else {
-            return Err(SyamlError::SchemaError(format!(
-                "referenced enum type '{}' at {} must contain only strings",
-                enum_type_name, path
-            )));
-        };
-        out.insert(as_str.to_string());
+    if let Some(arr) = enum_values.as_array() {
+        for value in arr {
+            let Some(as_str) = value.as_str() else {
+                return Err(SyamlError::SchemaError(format!(
+                    "referenced enum type '{}' at {} must contain only strings",
+                    enum_type_name, path
+                )));
+            };
+            out.insert(as_str.to_string());
+        }
+        return Ok(out);
     }
-    Ok(out)
+    if let Some(map) = enum_values.as_object() {
+        for key in map.keys() {
+            if !is_valid_enum_member_key(key) {
+                return Err(SyamlError::SchemaError(format!(
+                    "invalid enum member key '{}' in referenced enum type '{}' at {}: keys must match [A-Za-z_][A-Za-z0-9_]*",
+                    key, enum_type_name, path
+                )));
+            }
+            out.insert(key.clone());
+        }
+        return Ok(out);
+    }
+    Err(SyamlError::SchemaError(format!(
+        "referenced type '{}' at {} must declare an enum array or object",
+        enum_type_name, path
+    )))
+}
+
+fn is_valid_enum_member_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn parse_decode_kind(value: &str, path: &str) -> Result<DecodeKind, SyamlError> {

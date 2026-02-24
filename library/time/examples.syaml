@@ -10,10 +10,9 @@ _examples:
   month <t.Months>: march
   time_unit <t.TimeUnits>: hours
   time_direction <t.TimeDirections>: past
-  timezone <t.Timezone>:
-    locale: America/New_York
-    abbreviation: EST
-    offset: -05:00
+  timezone <t.TimezoneInfo>: t.Timezone.NEW_YORK
+  timezone_dst <t.TimezoneInfo>: t.Timezone.NEW_YORK
+  timezone_utc <t.TimezoneInfo>: t.Timezone.UTC
   date <t.IsoDate>: 2024-03-15
   time <t.IsoTime>: 14:30:00
   datetime <t.IsoDateTime>: 2024-03-15T14:30:00Z
@@ -27,10 +26,7 @@ _examples:
     end: 17:00:00
   timestamp <t.Timestamp>:
     datetime: 2024-03-15T14:30:00Z
-    timezone:
-      locale: UTC
-      abbreviation: UTC
-      offset: +00:00
+    timezone: t.Timezone.UTC
   relative_past <t.RelativeTime>:
     unit: days
     amount: 7

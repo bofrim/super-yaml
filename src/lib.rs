@@ -23,14 +23,24 @@ pub mod ast;
 pub mod coerce;
 /// Error types used throughout parsing, compilation, and validation.
 pub mod error;
+/// Expression lexer/parser/evaluator used by derived values and constraints.
+pub mod expr;
 /// URL-based import fetching, disk caching, and lockfile management.
 pub mod fetch;
 /// Parsing and validation for the `---functional` section.
 pub mod functional;
-/// Expression lexer/parser/evaluator used by derived values and constraints.
-pub mod expr;
+/// HTML documentation generator for `.syaml` files.
+pub mod html_docs_gen;
+/// super_yaml schema to JSON Schema export.
+pub mod json_schema_export;
+/// JSON Schema to super_yaml schema conversion.
+pub mod json_schema_import;
 /// Minimal YAML subset parser used for section bodies.
 pub mod mini_yaml;
+/// Module manifest parsing, discovery, and import policy enforcement.
+pub mod module;
+/// Proto3 file generation from named schema definitions.
+pub mod proto_codegen;
 /// Environment and expression resolution over parsed data.
 pub mod resolve;
 /// Rust type generation from named schema definitions.
@@ -45,25 +55,15 @@ pub mod template;
 pub mod type_hints;
 /// TypeScript type generation from named schema definitions.
 pub mod typescript_codegen;
-/// Proto3 file generation from named schema definitions.
-pub mod proto_codegen;
-/// JSON Schema to super_yaml schema conversion.
-pub mod json_schema_import;
-/// super_yaml schema to JSON Schema export.
-pub mod json_schema_export;
 /// Constraint and type-hint validation routines.
 pub mod validate;
 /// Import integrity verification: hash, signature, and version checks.
 pub mod verify;
 /// JSON-to-YAML renderer used by compiled YAML output.
 pub mod yaml_writer;
-/// Module manifest parsing, discovery, and import policy enforcement.
-pub mod module;
-/// HTML documentation generator for `.syaml` files.
-pub mod html_docs_gen;
 pub use html_docs_gen::{
-    collect_import_graph, discover_module_members, generate_html_docs, generate_html_docs_from_path,
-    generate_html_docs_site,
+    collect_import_graph, discover_module_members, generate_html_docs,
+    generate_html_docs_from_path, generate_html_docs_site,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -79,7 +79,13 @@ use ast::{
 use coerce::coerce_string_constructors_for_type_hints;
 pub use error::SyamlError;
 use fetch::FetchContext;
-use resolve::{resolve_data_references, resolve_env_bindings, resolve_expressions_with_imports};
+pub use json_schema_export::to_json_schema;
+pub use json_schema_import::{from_json_schema, from_json_schema_path};
+pub use proto_codegen::{generate_proto_types, generate_proto_types_from_path};
+use resolve::{
+    resolve_data_references, resolve_enum_member_references, resolve_env_bindings,
+    resolve_expressions_with_imports,
+};
 pub use resolve::{EnvProvider, MapEnvProvider, ProcessEnvProvider};
 pub use rust_codegen::{
     generate_rust_types, generate_rust_types_and_data_from_path, generate_rust_types_from_path,
@@ -92,9 +98,6 @@ pub use typescript_codegen::{
     generate_typescript_types, generate_typescript_types_and_data_from_path,
     generate_typescript_types_from_path,
 };
-pub use proto_codegen::{generate_proto_types, generate_proto_types_from_path};
-pub use json_schema_import::{from_json_schema, from_json_schema_path};
-pub use json_schema_export::to_json_schema;
 use validate::{
     build_effective_constraints, validate_constraints_with_imports, validate_type_hints,
     validate_versioned_fields,
@@ -127,8 +130,13 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
                 schema = parse_schema(&section_value)?;
             }
             "data" => {
-                let (value, type_hints, freeze_markers) = normalize_data_with_hints(&section_value)?;
-                data = DataDoc { value, type_hints, freeze_markers };
+                let (value, type_hints, freeze_markers) =
+                    normalize_data_with_hints(&section_value)?;
+                data = DataDoc {
+                    value,
+                    type_hints,
+                    freeze_markers,
+                };
             }
             "functional" => {
                 functional = Some(functional::parse_functional(&section_value)?);
@@ -137,7 +145,8 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
                 // Module sections are only valid in module.syaml; handled by module::parse_module_manifest.
                 // Reject them in regular document parsing.
                 return Err(SyamlError::SectionError(
-                    "'---module' section is only allowed in module.syaml manifest files".to_string(),
+                    "'---module' section is only allowed in module.syaml manifest files"
+                        .to_string(),
                 ));
             }
             _ => unreachable!("validated by section scanner"),
@@ -180,8 +189,13 @@ pub fn parse_document_or_manifest(input: &str) -> Result<ParsedDocument, SyamlEr
                 schema = parse_schema(&section_value)?;
             }
             "data" => {
-                let (value, type_hints, freeze_markers) = normalize_data_with_hints(&section_value)?;
-                data = DataDoc { value, type_hints, freeze_markers };
+                let (value, type_hints, freeze_markers) =
+                    normalize_data_with_hints(&section_value)?;
+                data = DataDoc {
+                    value,
+                    type_hints,
+                    freeze_markers,
+                };
             }
             "functional" => {
                 functional = Some(functional::parse_functional(&section_value)?);
@@ -336,7 +350,6 @@ impl<'a> CompileContext<'a> {
             fetch_ctx: FetchContext::disabled(),
         }
     }
-
 }
 
 fn compile_document_internal(
@@ -439,7 +452,14 @@ fn compile_module_manifest(
             };
             let mut dummy_types = schema_doc.types.clone();
             let mut dummy_data = HashMap::new();
-            merge_imports(&manifest_meta, base_dir, &mut dummy_types, &mut BTreeMap::new(), &mut dummy_data, ctx)?;
+            merge_imports(
+                &manifest_meta,
+                base_dir,
+                &mut dummy_types,
+                &mut BTreeMap::new(),
+                &mut dummy_data,
+                ctx,
+            )?;
             exported_types = dummy_types;
             // For now, we don't merge type_constraints during manifest imports
             exported_type_constraints = schema_doc.type_constraints;
@@ -571,7 +591,14 @@ fn compile_parsed_document(
     let mut imported_data = HashMap::new();
 
     let excluded_hints = if let Some(meta) = parsed.meta.as_ref() {
-        merge_imports(meta, base_dir, &mut schema.types, &mut schema.type_constraints, &mut imported_data, ctx)?
+        merge_imports(
+            meta,
+            base_dir,
+            &mut schema.types,
+            &mut schema.type_constraints,
+            &mut imported_data,
+            ctx,
+        )?
     } else {
         HashMap::new()
     };
@@ -608,6 +635,8 @@ fn compile_parsed_document(
         .collect();
     resolve_expressions_with_imports(&mut data, &env_values, &imports_for_eval)
         .map_err(|e| augment_with_section_hint(e, &excluded_hints))?;
+    resolve_enum_member_references(&mut data, &parsed.data.type_hints, &schema)
+        .map_err(|e| augment_with_section_hint(e, &excluded_hints))?;
     coerce_string_constructors_for_type_hints(&mut data, &parsed.data.type_hints, &schema.types)?;
 
     validate_type_hints(&data, &parsed.data.type_hints, &schema)
@@ -615,18 +644,31 @@ fn compile_parsed_document(
     let constraints = build_effective_constraints(&parsed.data.type_hints, &schema);
     validate_constraints_with_imports(&data, &env_values, &constraints, &imports_for_eval)?;
 
-    let warnings =
-        validate_versioned_fields(&data, &parsed.data.type_hints, &schema, target_schema_version.as_ref())?;
+    let warnings = validate_versioned_fields(
+        &data,
+        &parsed.data.type_hints,
+        &schema,
+        target_schema_version.as_ref(),
+    )?;
 
     if let Some(ref func_doc) = parsed.functional {
-        let import_aliases: std::collections::BTreeSet<String> = parsed.meta.iter()
+        let import_aliases: std::collections::BTreeSet<String> = parsed
+            .meta
+            .iter()
             .flat_map(|m| m.imports.keys().cloned())
             .collect();
         let all_types = schema.types.clone();
         functional::validate_functional_type_references(func_doc, &all_types)?;
         functional::validate_permission_data_paths(func_doc, &data, &import_aliases)?;
-        functional::validate_permission_mutability_alignment(func_doc, &schema, &parsed.data.type_hints)?;
-        functional::validate_permission_instance_lock_conflicts(func_doc, &parsed.data.freeze_markers)?;
+        functional::validate_permission_mutability_alignment(
+            func_doc,
+            &schema,
+            &parsed.data.type_hints,
+        )?;
+        functional::validate_permission_instance_lock_conflicts(
+            func_doc,
+            &parsed.data.freeze_markers,
+        )?;
         functional::validate_specification_strict_conditions(func_doc)?;
     }
 
@@ -662,8 +704,7 @@ fn merge_imports(
     let mut excluded_hints: HashMap<String, String> = HashMap::new();
 
     for (alias, binding) in &meta.imports {
-        let source =
-            fetch::resolve_import_source(base_dir, &binding.path, &ctx.fetch_ctx)?;
+        let source = fetch::resolve_import_source(base_dir, &binding.path, &ctx.fetch_ctx)?;
         let display_id = source.display_id();
 
         let content = fetch::read_import_source(&source, &mut ctx.fetch_ctx).map_err(|e| {
@@ -692,13 +733,12 @@ fn merge_imports(
         }
 
         let canonical = source.canonical_path().to_path_buf();
-        let imported =
-            compile_document_from_content(&content, &canonical, ctx).map_err(|e| {
-                SyamlError::ImportError(format!(
-                    "failed to compile import '{}' for namespace '{}': {e}",
-                    display_id, alias
-                ))
-            })?;
+        let imported = compile_document_from_content(&content, &canonical, ctx).map_err(|e| {
+            SyamlError::ImportError(format!(
+                "failed to compile import '{}' for namespace '{}': {e}",
+                display_id, alias
+            ))
+        })?;
 
         if let Some(ref version_req) = binding.version {
             let imported_parsed = parse_document(&content)?;
@@ -720,7 +760,11 @@ fn merge_imports(
 
         if imports_section(&binding.sections, "schema") {
             insert_imported_types(type_registry, alias, &imported.exported_types)?;
-            insert_imported_type_constraints(type_constraints, alias, &imported.exported_type_constraints)?;
+            insert_imported_type_constraints(
+                type_constraints,
+                alias,
+                &imported.exported_type_constraints,
+            )?;
         } else {
             for type_name in imported.exported_types.keys() {
                 excluded_hints.insert(
@@ -1273,10 +1317,7 @@ session <SessionConfig>:
 "#;
 
         let compiled = compile_document(input, &env_provider(&[])).unwrap();
-        assert_eq!(
-            compiled.value["session"]["min_attendees"],
-            json!(3)
-        );
+        assert_eq!(compiled.value["session"]["min_attendees"], json!(3));
         assert_eq!(compiled.value["session"]["max_attendees"], json!(5));
     }
 
@@ -1307,10 +1348,7 @@ session <SessionConfig>:
 "#;
 
         let compiled = compile_document(input, &env_provider(&[])).unwrap();
-        assert_eq!(
-            compiled.value["session"]["min_attendees"],
-            json!(3)
-        );
+        assert_eq!(compiled.value["session"]["min_attendees"], json!(3));
         assert_eq!(compiled.value["session"]["max_attendees"], json!(5));
     }
 

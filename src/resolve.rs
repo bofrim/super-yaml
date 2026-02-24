@@ -6,11 +6,12 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde_json::Value as JsonValue;
 
-use crate::ast::{EnvBinding, Meta};
+use crate::ast::{EnvBinding, Meta, SchemaDoc};
 use crate::error::SyamlError;
 use crate::expr::eval::{evaluate, EvalContext, EvalError};
 use crate::expr::parse_expression;
 use crate::mini_yaml;
+use crate::schema::{resolve_type_schema, validate_json_against_schema_with_types};
 
 const MAX_DERIVED_EXPRESSIONS: usize = 1024;
 const MAX_INTERPOLATIONS_PER_STRING: usize = 128;
@@ -381,7 +382,7 @@ fn set_json_path(root: &mut JsonValue, path: &str, value: JsonValue) -> Result<(
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PathSegment {
     Key(String),
     Index(usize),
@@ -567,10 +568,7 @@ pub fn resolve_data_references(data: &mut JsonValue) -> Result<(), SyamlError> {
 
             let value = get_json_path(data, &target)
                 .ok_or_else(|| {
-                    SyamlError::ExpressionError(format!(
-                        "data reference '{}' not found",
-                        node.raw
-                    ))
+                    SyamlError::ExpressionError(format!("data reference '{}' not found", node.raw))
                 })?
                 .clone();
 
@@ -592,4 +590,325 @@ pub fn resolve_data_references(data: &mut JsonValue) -> Result<(), SyamlError> {
     Err(SyamlError::CycleError(
         "data reference resolution exceeded max passes".to_string(),
     ))
+}
+
+/// Resolves exact-token enum member references (`Type.member`) in-place.
+///
+/// When a token appears in a typed context (direct hint or under an ancestor hint with
+/// inferable descendant schema), it must resolve to a keyed enum member and validate
+/// against the expected schema at that path.
+pub fn resolve_enum_member_references(
+    data: &mut JsonValue,
+    type_hints: &BTreeMap<String, String>,
+    schema: &SchemaDoc,
+) -> Result<(), SyamlError> {
+    let mut nodes = Vec::new();
+    collect_enum_member_reference_nodes(data, "$", &mut nodes);
+    for node in nodes {
+        let Some((enum_type, member_key)) = parse_enum_member_reference(&node.raw) else {
+            continue;
+        };
+        if !schema.types.contains_key(enum_type.as_str()) {
+            continue;
+        }
+        let expected_schema = infer_expected_schema_for_path(&node.path, type_hints, schema)?;
+        match resolve_one_enum_member_value(schema, &enum_type, &member_key, &node.path) {
+            Ok(resolved) => {
+                if let Some(expected) = expected_schema.as_ref() {
+                    validate_json_against_schema_with_types(
+                        &resolved,
+                        expected,
+                        &node.path,
+                        &schema.types,
+                    )
+                    .map_err(|e| {
+                        SyamlError::TypeHintError(format!(
+                            "enum member reference '{}' at {} is not compatible with expected schema: {}",
+                            node.raw, node.path, e
+                        ))
+                    })?;
+                }
+                set_json_path(data, &node.path, resolved)?;
+            }
+            Err(err) => {
+                if expected_schema.is_some() {
+                    return Err(err);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_enum_member_reference_nodes(
+    value: &JsonValue,
+    path: &str,
+    out: &mut Vec<ExpressionNode>,
+) {
+    match value {
+        JsonValue::Object(map) => {
+            for (k, v) in map {
+                let child = format!("{}.{}", path, k);
+                collect_enum_member_reference_nodes(v, &child, out);
+            }
+        }
+        JsonValue::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                let child = format!("{}[{}]", path, i);
+                collect_enum_member_reference_nodes(v, &child, out);
+            }
+        }
+        JsonValue::String(s) => {
+            let trimmed = s.trim();
+            if parse_enum_member_reference(trimmed).is_some() {
+                out.push(ExpressionNode {
+                    path: path.to_string(),
+                    raw: trimmed.to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_enum_member_reference(raw: &str) -> Option<(String, String)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r"^([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.([A-Za-z_][A-Za-z0-9_]*)$",
+        )
+        .expect("valid regex")
+    });
+    let caps = re.captures(raw)?;
+    let enum_type = caps.get(1)?.as_str().to_string();
+    let member = caps.get(2)?.as_str().to_string();
+    Some((enum_type, member))
+}
+
+fn resolve_one_enum_member_value(
+    schema: &SchemaDoc,
+    enum_type_name: &str,
+    member_key: &str,
+    path: &str,
+) -> Result<JsonValue, SyamlError> {
+    let enum_schema = schema.types.get(enum_type_name).ok_or_else(|| {
+        SyamlError::TypeHintError(format!(
+            "unknown enum type '{}' referenced by '{}' at {}",
+            enum_type_name,
+            format!("{}.{}", enum_type_name, member_key),
+            path
+        ))
+    })?;
+    let enum_obj = enum_schema.as_object().ok_or_else(|| {
+        SyamlError::TypeHintError(format!(
+            "enum type '{}' referenced at {} must be an object schema",
+            enum_type_name, path
+        ))
+    })?;
+    let enum_values = enum_obj.get("enum").ok_or_else(|| {
+        SyamlError::TypeHintError(format!(
+            "enum type '{}' referenced at {} must declare an enum map",
+            enum_type_name, path
+        ))
+    })?;
+    let enum_map = enum_values.as_object().ok_or_else(|| {
+        SyamlError::TypeHintError(format!(
+            "enum type '{}' referenced at {} must declare keyed enum values to use Type.member references",
+            enum_type_name, path
+        ))
+    })?;
+    let member = enum_map.get(member_key).ok_or_else(|| {
+        SyamlError::TypeHintError(format!(
+            "enum member '{}' not found on type '{}' at {}",
+            member_key, enum_type_name, path
+        ))
+    })?;
+    Ok(member.clone())
+}
+
+fn infer_expected_schema_for_path(
+    path: &str,
+    type_hints: &BTreeMap<String, String>,
+    schema: &SchemaDoc,
+) -> Result<Option<JsonValue>, SyamlError> {
+    if let Some(type_name) = type_hints.get(path) {
+        return Ok(Some(resolve_type_schema(schema, type_name)?));
+    }
+    let Some((ancestor_path, ancestor_type)) = nearest_ancestor_hint(path, type_hints) else {
+        return Ok(None);
+    };
+
+    let ancestor_segments = parse_path_for_hints(&ancestor_path)?;
+    let target_segments = parse_path_for_hints(path)?;
+    if !target_segments.starts_with(&ancestor_segments) {
+        return Err(SyamlError::TypeHintError(format!(
+            "internal type-hint path mismatch: '{}' is not under '{}'",
+            path, ancestor_path
+        )));
+    }
+
+    let mut current_schema = resolve_type_schema(schema, ancestor_type)?;
+    for segment in target_segments.iter().skip(ancestor_segments.len()) {
+        let mut visited_types = Vec::new();
+        match descend_schema_for_segment(
+            schema,
+            &current_schema,
+            segment,
+            path,
+            &mut visited_types,
+        )? {
+            SegmentLookup::Found(next) => current_schema = next,
+            SegmentLookup::ExplicitlyMissing => {
+                return Err(SyamlError::TypeHintError(format!(
+                    "type hint '{}' is not declared in schema under ancestor hint '{}' ({})",
+                    path, ancestor_path, ancestor_type
+                )))
+            }
+            SegmentLookup::Unspecified => return Ok(None),
+        }
+    }
+
+    Ok(Some(current_schema))
+}
+
+fn nearest_ancestor_hint<'a>(
+    path: &str,
+    hints: &'a BTreeMap<String, String>,
+) -> Option<(String, &'a str)> {
+    let mut candidate = parent_path_of(path);
+    while let Some(parent) = candidate {
+        if let Some(type_name) = hints.get(&parent) {
+            return Some((parent, type_name.as_str()));
+        }
+        candidate = parent_path_of(&parent);
+    }
+    None
+}
+
+#[derive(Debug)]
+enum SegmentLookup {
+    Found(JsonValue),
+    ExplicitlyMissing,
+    Unspecified,
+}
+
+fn parse_path_for_hints(path: &str) -> Result<Vec<PathSegment>, SyamlError> {
+    parse_path(path).map_err(|e| SyamlError::TypeHintError(e.to_string()))
+}
+
+fn descend_schema_for_segment(
+    schema: &SchemaDoc,
+    current_schema: &JsonValue,
+    segment: &PathSegment,
+    path: &str,
+    visited_types: &mut Vec<String>,
+) -> Result<SegmentLookup, SyamlError> {
+    let schema_obj = current_schema.as_object().ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "schema at {path} must be an object, found {current_schema:?}"
+        ))
+    })?;
+
+    if schema_obj.get("type").and_then(JsonValue::as_str) == Some("union") {
+        return Ok(SegmentLookup::Unspecified);
+    }
+
+    let local_result = match segment {
+        PathSegment::Key(key) => {
+            if let Some(props_json) = schema_obj.get("properties") {
+                let props = props_json.as_object().ok_or_else(|| {
+                    SyamlError::SchemaError(format!("properties at {path} must be an object"))
+                })?;
+                if let Some(found) = props.get(key) {
+                    SegmentLookup::Found(found.clone())
+                } else if let Some(values_schema) = schema_obj.get("values") {
+                    SegmentLookup::Found(values_schema.clone())
+                } else {
+                    SegmentLookup::ExplicitlyMissing
+                }
+            } else if let Some(values_schema) = schema_obj.get("values") {
+                SegmentLookup::Found(values_schema.clone())
+            } else {
+                SegmentLookup::Unspecified
+            }
+        }
+        PathSegment::Index(_) => {
+            if let Some(items) = schema_obj.get("items") {
+                SegmentLookup::Found(items.clone())
+            } else {
+                SegmentLookup::Unspecified
+            }
+        }
+    };
+    if let SegmentLookup::Found(_) = local_result {
+        return Ok(local_result);
+    }
+
+    match segment {
+        PathSegment::Key(_) => {
+            if let Some(raw_type) = schema_obj.get("type") {
+                let type_name = raw_type.as_str().ok_or_else(|| {
+                    SyamlError::SchemaError(format!("schema 'type' at {path} must be a string"))
+                })?;
+                if is_builtin_type_name(type_name) && type_name != "object" {
+                    return Ok(SegmentLookup::ExplicitlyMissing);
+                }
+            }
+        }
+        PathSegment::Index(_) => {
+            if let Some(raw_type) = schema_obj.get("type") {
+                let type_name = raw_type.as_str().ok_or_else(|| {
+                    SyamlError::SchemaError(format!("schema 'type' at {path} must be a string"))
+                })?;
+                if is_builtin_type_name(type_name) && type_name != "array" {
+                    return Ok(SegmentLookup::ExplicitlyMissing);
+                }
+            }
+        }
+    }
+
+    let Some(raw_type) = schema_obj.get("type") else {
+        return Ok(local_result);
+    };
+    let type_name = raw_type.as_str().ok_or_else(|| {
+        SyamlError::SchemaError(format!("schema 'type' at {path} must be a string"))
+    })?;
+    if is_builtin_type_name(type_name) {
+        return Ok(local_result);
+    }
+
+    let referenced = schema.types.get(type_name).ok_or_else(|| {
+        SyamlError::TypeHintError(format!(
+            "unknown type reference at {path}: '{type_name}' not found in schema"
+        ))
+    })?;
+    if let Some(cycle_start) = visited_types.iter().position(|t| t == type_name) {
+        let mut cycle = visited_types[cycle_start..].to_vec();
+        cycle.push(type_name.to_string());
+        return Err(SyamlError::TypeHintError(format!(
+            "cyclic type reference while resolving nested type hints at {path}: {}",
+            cycle.join(" -> ")
+        )));
+    }
+    visited_types.push(type_name.to_string());
+    let referenced_result =
+        descend_schema_for_segment(schema, referenced, segment, path, visited_types);
+    visited_types.pop();
+    let referenced_result = referenced_result?;
+    if let SegmentLookup::Found(_) = referenced_result {
+        return Ok(referenced_result);
+    }
+
+    match local_result {
+        SegmentLookup::ExplicitlyMissing => Ok(SegmentLookup::ExplicitlyMissing),
+        SegmentLookup::Unspecified => Ok(referenced_result),
+        SegmentLookup::Found(_) => unreachable!("handled above"),
+    }
+}
+
+fn is_builtin_type_name(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "string" | "integer" | "number" | "boolean" | "object" | "array" | "null"
+    )
 }

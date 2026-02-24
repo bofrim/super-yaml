@@ -194,6 +194,7 @@ fn insert_imported_types(
 
 struct RenderState {
     type_names: BTreeMap<String, String>,
+    all_types: BTreeMap<String, JsonValue>,
     type_constraints: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     needs_serde_derives: bool,
     needs_serde_json_value: bool,
@@ -299,8 +300,7 @@ fn expand_inline_enum_schemas(schemas: &CollectedSchemas) -> CollectedSchemas {
                         .as_object()
                         .and_then(|o| o.get("optional"))
                         .cloned();
-                    let mut new_field =
-                        serde_json::json!({ "type": p.generated_source.as_str() });
+                    let mut new_field = serde_json::json!({ "type": p.generated_source.as_str() });
                     if let Some(opt) = optional {
                         new_field["optional"] = opt;
                     }
@@ -329,6 +329,7 @@ fn render_rust_types_expanded(schemas: &CollectedSchemas) -> String {
     let type_names = build_type_name_map(&schemas.types);
     let mut state = RenderState {
         type_names,
+        all_types: schemas.types.clone(),
         type_constraints: schemas.type_constraints.clone(),
         needs_serde_derives: false,
         needs_serde_json_value: false,
@@ -400,6 +401,9 @@ fn render_type_definition(
     let mut out = if is_union_schema(schema_obj) {
         state.needs_serde_derives = true;
         render_union_enum(&rust_name, schema_obj, state)
+    } else if let Some(members) = collect_keyed_enum_members(schema_obj) {
+        state.needs_serde_derives = true;
+        render_keyed_enum_helpers(source_name, &rust_name, schema_obj, &members, state)
     } else if let Some(variants) = collect_string_enum_variants(schema_obj) {
         state.needs_serde_derives = true;
         render_string_enum(&rust_name, &variants)
@@ -544,11 +548,7 @@ fn render_union_enum(
     out
 }
 
-fn infer_union_variant_name(
-    schema: &JsonValue,
-    index: usize,
-    state: &RenderState,
-) -> String {
+fn infer_union_variant_name(schema: &JsonValue, index: usize, state: &RenderState) -> String {
     if let Some(type_name) = schema
         .as_object()
         .and_then(|obj| obj.get("type"))
@@ -579,6 +579,24 @@ fn collect_string_enum_variants(schema_obj: &JsonMap<String, JsonValue>) -> Opti
     Some(out)
 }
 
+fn collect_keyed_enum_members(
+    schema_obj: &JsonMap<String, JsonValue>,
+) -> Option<Vec<(String, JsonValue)>> {
+    let enum_map = schema_obj.get("enum")?.as_object()?;
+    if enum_map.is_empty() {
+        return None;
+    }
+    if schema_obj.get("type").and_then(JsonValue::as_str).is_none() {
+        return None;
+    }
+    let mut members: Vec<(String, JsonValue)> = enum_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    members.sort_by(|a, b| a.0.cmp(&b.0));
+    Some(members)
+}
+
 fn is_object_schema(schema_obj: &JsonMap<String, JsonValue>) -> bool {
     match schema_obj.get("type").and_then(JsonValue::as_str) {
         Some("object") => true,
@@ -607,6 +625,73 @@ fn render_string_enum(name: &str, variants: &[String]) -> String {
     }
 
     out.push_str("}\n");
+    out
+}
+
+fn render_keyed_enum_helpers(
+    source_name: &str,
+    rust_name: &str,
+    schema_obj: &JsonMap<String, JsonValue>,
+    members: &[(String, JsonValue)],
+    state: &mut RenderState,
+) -> String {
+    let base_type = schema_obj
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .map(|type_name| rust_type_for_type_name(type_name, schema_obj, state))
+        .unwrap_or_else(|| {
+            state.needs_serde_json_value = true;
+            "Value".to_string()
+        });
+    let key_enum_name = format!("{rust_name}Key");
+    let helper_fn = format!(
+        "{}_value",
+        sanitize_field_name(source_name).trim_end_matches('_')
+    );
+
+    let mut out = String::new();
+    out.push_str(&format!("pub type {rust_name} = {base_type};\n\n"));
+    out.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    out.push_str(&format!("pub enum {key_enum_name} {{\n"));
+    let mut used_variants = HashSet::new();
+    let mut variants = Vec::with_capacity(members.len());
+    for (raw_key, _) in members {
+        let base = sanitize_variant_name(raw_key, "Variant");
+        let variant_name = unique_identifier(&base, &mut used_variants);
+        variants.push((raw_key.clone(), variant_name.clone()));
+        if variant_name != raw_key.as_str() {
+            out.push_str(&format!(
+                "    #[serde(rename = \"{}\")]\n",
+                escape_string(raw_key)
+            ));
+        }
+        out.push_str(&format!("    {variant_name},\n"));
+    }
+    out.push_str("}\n\n");
+
+    out.push_str(&format!("impl {key_enum_name} {{\n"));
+    out.push_str(&format!("    pub fn value(&self) -> {rust_name} {{\n"));
+    out.push_str("        match self {\n");
+    let declared_type_name = schema_obj
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .unwrap_or(source_name);
+    for ((_, value), (_, variant_name)) in members.iter().zip(variants.iter()) {
+        let literal = rust_value_literal(
+            value,
+            Some(&serde_json::json!({ "type": declared_type_name })),
+            &state.all_types,
+            &state.type_names,
+        );
+        out.push_str(&format!("            Self::{variant_name} => {literal},\n"));
+    }
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    out.push_str(&format!(
+        "pub fn {helper_fn}(key: {key_enum_name}) -> {rust_name} {{\n    key.value()\n}}\n"
+    ));
     out
 }
 
@@ -1031,15 +1116,13 @@ pub fn generate_rust_types_and_data_from_path(
     let type_names = build_type_name_map(&expanded.types);
 
     // Compile to get resolved data values.
-    let compiled =
-        crate::compile_document_from_path_with_fetch(path, env_provider, None, false)?;
+    let compiled = crate::compile_document_from_path_with_fetch(path, env_provider, None, false)?;
 
     // Render types using the expanded schema set.
     let types_output = render_rust_types_expanded(&expanded);
 
     // Render data items using the same expanded types + type_names.
-    let data_output =
-        render_rust_data(&compiled.value, &type_hints, &expanded.types, &type_names);
+    let data_output = render_rust_data(&compiled.value, &type_hints, &expanded.types, &type_names);
 
     let functional_output = if let Some(ref func_doc) = parsed.functional {
         crate::functional::generate_rust_function_stubs(func_doc, &expanded.types)
@@ -1168,9 +1251,7 @@ fn render_rust_data_item(
                 .is_some();
             if is_enum {
                 let variant = sanitize_variant_name(s, "Variant");
-                return format!(
-                    "pub const {const_name}: {rust_type} = {rust_type}::{variant};\n"
-                );
+                return format!("pub const {const_name}: {rust_type} = {rust_type}::{variant};\n");
             }
             let escaped = escape_string(s);
             format!("pub fn {var_name}() -> String {{\n    \"{escaped}\".to_string()\n}}\n")
@@ -1195,9 +1276,7 @@ fn render_rust_data_item(
             if let Some(schema_val) = schema {
                 if let Some(schema_obj) = schema_val.as_object() {
                     // Struct with named properties.
-                    if let Some(props) =
-                        schema_obj.get("properties").and_then(|p| p.as_object())
-                    {
+                    if let Some(props) = schema_obj.get("properties").and_then(|p| p.as_object()) {
                         let required = required_property_set(schema_obj, props);
                         let mut field_lines = String::new();
                         let mut sorted_keys: Vec<_> = props.keys().collect();
@@ -1217,8 +1296,7 @@ fn render_rust_data_item(
                                     field_lines
                                         .push_str(&format!("        {field_name}: Some({lit}),\n"));
                                 } else {
-                                    field_lines
-                                        .push_str(&format!("        {field_name}: None,\n"));
+                                    field_lines.push_str(&format!("        {field_name}: None,\n"));
                                 }
                             } else if let Some(field_val) = obj_map.get(prop_key) {
                                 let lit = rust_value_literal(
@@ -1227,8 +1305,7 @@ fn render_rust_data_item(
                                     types,
                                     type_names,
                                 );
-                                field_lines
-                                    .push_str(&format!("        {field_name}: {lit},\n"));
+                                field_lines.push_str(&format!("        {field_name}: {lit},\n"));
                             }
                         }
                         return format!(
@@ -1238,17 +1315,12 @@ fn render_rust_data_item(
 
                     // Typed dict.
                     if let Some(values_schema) = schema_obj.get("values") {
-                        let val_type =
-                            rust_schema_to_type(Some(values_schema), types, type_names);
+                        let val_type = rust_schema_to_type(Some(values_schema), types, type_names);
                         let mut entries: Vec<String> = obj_map
                             .iter()
                             .map(|(k, v)| {
-                                let lit = rust_value_literal(
-                                    v,
-                                    Some(values_schema),
-                                    types,
-                                    type_names,
-                                );
+                                let lit =
+                                    rust_value_literal(v, Some(values_schema), types, type_names);
                                 format!("        (\"{}\".to_string(), {})", escape_string(k), lit)
                             })
                             .collect();
@@ -1266,8 +1338,7 @@ fn render_rust_data_item(
             }
 
             // Fallback: serde_json::json! macro.
-            let json_str = serde_json::to_string_pretty(value)
-                .unwrap_or_else(|_| "{}".to_string());
+            let json_str = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string());
             format!(
                 "pub fn {var_name}() -> serde_json::Value {{\n    serde_json::json!({json_str})\n}}\n"
             )
@@ -1331,9 +1402,7 @@ fn rust_value_literal(
             if let Some(schema_val) = effective_schema {
                 if let Some(schema_obj) = schema_val.as_object() {
                     // Struct with properties — requires a known type name.
-                    if let Some(props) =
-                        schema_obj.get("properties").and_then(|p| p.as_object())
-                    {
+                    if let Some(props) = schema_obj.get("properties").and_then(|p| p.as_object()) {
                         if let Some(struct_name) = effective_rust_name.as_deref() {
                             let required = required_property_set(schema_obj, props);
                             let mut field_parts: Vec<String> = Vec::new();
@@ -1351,8 +1420,7 @@ fn rust_value_literal(
                                             types,
                                             type_names,
                                         );
-                                        field_parts
-                                            .push(format!("{field_name}: Some({lit})"));
+                                        field_parts.push(format!("{field_name}: Some({lit})"));
                                     } else {
                                         field_parts.push(format!("{field_name}: None"));
                                     }
@@ -1366,10 +1434,7 @@ fn rust_value_literal(
                                     field_parts.push(format!("{field_name}: {lit}"));
                                 }
                             }
-                            return format!(
-                                "{struct_name} {{ {} }}",
-                                field_parts.join(", ")
-                            );
+                            return format!("{struct_name} {{ {} }}", field_parts.join(", "));
                         }
                     }
 
@@ -1378,12 +1443,8 @@ fn rust_value_literal(
                         let entries: Vec<String> = obj_map
                             .iter()
                             .map(|(k, v)| {
-                                let lit = rust_value_literal(
-                                    v,
-                                    Some(values_schema),
-                                    types,
-                                    type_names,
-                                );
+                                let lit =
+                                    rust_value_literal(v, Some(values_schema), types, type_names);
                                 format!("(\"{}\".to_string(), {})", escape_string(k), lit)
                             })
                             .collect();
@@ -1393,8 +1454,7 @@ fn rust_value_literal(
             }
 
             // Fallback: serde_json::json! macro.
-            let json_str =
-                serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+            let json_str = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
             format!("serde_json::json!({})", json_str)
         }
     }
@@ -1634,7 +1694,15 @@ Count:
 count <Count>: 7
 "#;
         let rendered = generate_rust_types(input).unwrap();
-        assert!(rendered.contains("value >= 0"), "missing minimum expr:\n{}", rendered);
-        assert!(rendered.contains("value != 42"), "missing explicit constraint:\n{}", rendered);
+        assert!(
+            rendered.contains("value >= 0"),
+            "missing minimum expr:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("value != 42"),
+            "missing explicit constraint:\n{}",
+            rendered
+        );
     }
 }

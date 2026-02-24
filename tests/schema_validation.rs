@@ -222,6 +222,83 @@ fn parse_schema_normalizes_string_enum_shorthand_for_nested_nodes() {
 }
 
 #[test]
+fn validate_json_against_schema_accepts_keyed_enum_values() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "SomeType": {
+                "type": "object",
+                "properties": {
+                    "field_a": "integer",
+                    "field_b": "string"
+                }
+            },
+            "SomeEnum": {
+                "type": "SomeType",
+                "enum": {
+                    "option_1": { "field_a": 1, "field_b": "one" },
+                    "option_2": { "field_a": 2, "field_b": "two" }
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    validate_json_against_schema_with_types(
+        &json!({"field_a": 1, "field_b": "one"}),
+        schema.types.get("SomeEnum").unwrap(),
+        "$.x",
+        &schema.types,
+    )
+    .unwrap();
+}
+
+#[test]
+fn parse_schema_rejects_keyed_enum_invalid_member_key() {
+    let err = parse_schema(&json!({
+        "types": {
+            "SomeType": {
+                "type": "object",
+                "properties": {
+                    "field_a": "integer"
+                }
+            },
+            "SomeEnum": {
+                "type": "SomeType",
+                "enum": {
+                    "bad-key": { "field_a": 1 }
+                }
+            }
+        }
+    }))
+    .unwrap();
+    let err = validate_schema_type_references(&err.types).unwrap_err();
+    assert!(err.to_string().contains("invalid enum member key"));
+}
+
+#[test]
+fn parse_schema_rejects_keyed_enum_member_value_type_mismatch() {
+    let schema = parse_schema(&json!({
+        "types": {
+            "SomeType": {
+                "type": "object",
+                "properties": {
+                    "field_a": "integer"
+                }
+            },
+            "SomeEnum": {
+                "type": "SomeType",
+                "enum": {
+                    "option_1": { "field_a": "one" }
+                }
+            }
+        }
+    }))
+    .unwrap();
+    let err = validate_schema_type_references(&schema.types).unwrap_err();
+    assert!(err.to_string().contains("type mismatch"));
+}
+
+#[test]
 fn validate_type_hints_accepts_shorthand_property_type_reference() {
     let schema = parse_schema(&json!({
         "types": {
@@ -1415,6 +1492,35 @@ fn validate_schema_type_references_accepts_constructor_from_enum() {
 }
 
 #[test]
+fn validate_schema_type_references_accepts_constructor_from_keyed_enum() {
+    let schema = parse_schema(&json!({
+        "SizeClass": {
+            "type": "string",
+            "enum": {
+                "small": "S",
+                "large": "L"
+            }
+        },
+        "Shirt": {
+            "type": "object",
+            "properties": {
+                "size_key": "string"
+            },
+            "constructors": {
+                "from_text": {
+                    "regex": "^(?<size_key>[A-Za-z]+)$",
+                    "map": {
+                        "size_key": { "group": "size_key", "from_enum": "SizeClass" }
+                    }
+                }
+            }
+        }
+    }))
+    .unwrap();
+    validate_schema_type_references(&schema.types).unwrap();
+}
+
+#[test]
 fn validate_schema_type_references_rejects_constructor_from_enum_decode_conflict() {
     let schema = parse_schema(&json!({
         "MemoryUnit": ["MiB", "GiB"],
@@ -1438,7 +1544,7 @@ fn validate_schema_type_references_rejects_constructor_from_enum_decode_conflict
     let err = validate_schema_type_references(&schema.types).unwrap_err();
     assert!(err
         .to_string()
-        .contains("cannot set both 'decode' and 'from_enum'"));
+        .contains("can only set one of 'decode', 'from_enum', or 'eq'"));
 }
 
 #[test]
@@ -1846,7 +1952,10 @@ fn versioned_field_since_not_semver() {
         }
     });
     let err = parse_schema(&raw).unwrap_err();
-    assert!(err.to_string().contains("since"), "expected 'since' in error: {err}");
+    assert!(
+        err.to_string().contains("since"),
+        "expected 'since' in error: {err}"
+    );
 }
 
 #[test]
@@ -1862,7 +1971,10 @@ fn versioned_field_ordering_violation() {
         }
     });
     let err = parse_schema(&raw).unwrap_err();
-    assert!(err.to_string().contains("ordering"), "expected ordering error: {err}");
+    assert!(
+        err.to_string().contains("ordering"),
+        "expected ordering error: {err}"
+    );
 }
 
 #[test]
@@ -1876,7 +1988,10 @@ fn versioned_field_removed_requires_optional() {
         }
     });
     let err = parse_schema(&raw).unwrap_err();
-    assert!(err.to_string().contains("optional"), "expected optional error: {err}");
+    assert!(
+        err.to_string().contains("optional"),
+        "expected optional error: {err}"
+    );
 }
 
 #[test]
@@ -1891,7 +2006,10 @@ fn versioned_field_duplicate_field_number() {
         }
     });
     let err = parse_schema(&raw).unwrap_err();
-    assert!(err.to_string().contains("duplicate field_number"), "expected duplicate error: {err}");
+    assert!(
+        err.to_string().contains("duplicate field_number"),
+        "expected duplicate error: {err}"
+    );
 }
 
 #[test]
@@ -1920,7 +2038,10 @@ fn versioned_field_deprecated_unknown_severity() {
         "optional": true
     });
     let err = parse_field_version_meta(&schema).unwrap_err();
-    assert!(err.to_string().contains("severity"), "expected severity error: {err}");
+    assert!(
+        err.to_string().contains("severity"),
+        "expected severity error: {err}"
+    );
 }
 
 #[test]
@@ -1943,7 +2064,10 @@ item <Item>:
   new_field: hello
 "#;
     let err = compile_document(doc, &no_env()).unwrap_err();
-    assert!(err.to_string().contains("not available until"), "expected since error: {err}");
+    assert!(
+        err.to_string().contains("not available until"),
+        "expected since error: {err}"
+    );
 }
 
 #[test]
@@ -1967,7 +2091,10 @@ item <Item>:
   gone: still_here
 "#;
     let err = compile_document(doc, &no_env()).unwrap_err();
-    assert!(err.to_string().contains("removed in version"), "expected removed error: {err}");
+    assert!(
+        err.to_string().contains("removed in version"),
+        "expected removed error: {err}"
+    );
 }
 
 #[test]
@@ -1992,7 +2119,11 @@ item <Item>:
 "#;
     let compiled = compile_document(doc, &no_env()).unwrap();
     assert_eq!(compiled.warnings.len(), 1);
-    assert!(compiled.warnings[0].contains("deprecated"), "expected deprecation warning: {:?}", compiled.warnings);
+    assert!(
+        compiled.warnings[0].contains("deprecated"),
+        "expected deprecation warning: {:?}",
+        compiled.warnings
+    );
 }
 
 #[test]
@@ -2017,7 +2148,10 @@ item <Item>:
   bad_field: value
 "#;
     let err = compile_document(doc, &no_env()).unwrap_err();
-    assert!(err.to_string().contains("version field error"), "expected version field error: {err}");
+    assert!(
+        err.to_string().contains("version field error"),
+        "expected version field error: {err}"
+    );
 }
 
 #[test]
@@ -2043,7 +2177,10 @@ item <Item>:
   future_field: value
 "#;
     let compiled = compile_document(doc, &no_env()).unwrap();
-    assert!(compiled.warnings.is_empty(), "expected no warnings without schema_version");
+    assert!(
+        compiled.warnings.is_empty(),
+        "expected no warnings without schema_version"
+    );
 }
 
 #[test]
@@ -2069,7 +2206,10 @@ item <Item>:
   name: Alice
 "#;
     let compiled = compile_document(doc, &no_env()).unwrap();
-    assert!(compiled.warnings.is_empty(), "expected no warning when deprecated field is absent");
+    assert!(
+        compiled.warnings.is_empty(),
+        "expected no warning when deprecated field is absent"
+    );
 }
 
 #[test]

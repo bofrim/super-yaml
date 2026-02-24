@@ -21,7 +21,10 @@ impl TempDir {
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "super_yaml_datarefs_{}_{}_{}", prefix, std::process::id(), stamp
+            "super_yaml_datarefs_{}_{}_{}",
+            prefix,
+            std::process::id(),
+            stamp
         ));
         fs::create_dir_all(&path).expect("create temp dir");
         Self { path }
@@ -69,13 +72,19 @@ fn dollar_path_copies_entire_object() {
     let td = TempDir::new("obj");
     td.write("test.syaml", "---!syaml/v0\n---data\ndefaults:\n  timeout: 30\n  retries: 3\nservice_a:\n  config: $.defaults\n");
     let out = compile(&td.file_path("test.syaml"));
-    assert_eq!(out["service_a"]["config"], json!({"timeout": 30, "retries": 3}));
+    assert_eq!(
+        out["service_a"]["config"],
+        json!({"timeout": 30, "retries": 3})
+    );
 }
 
 #[test]
 fn dot_sibling_reference() {
     let td = TempDir::new("sibling");
-    td.write("test.syaml", "---!syaml/v0\n---data\nserver:\n  host: localhost\n  addr: .host\n");
+    td.write(
+        "test.syaml",
+        "---!syaml/v0\n---data\nserver:\n  host: localhost\n  addr: .host\n",
+    );
     let out = compile(&td.file_path("test.syaml"));
     assert_eq!(out["server"]["addr"], json!("localhost"));
 }
@@ -94,13 +103,19 @@ fn dollar_path_copies_array() {
     let td = TempDir::new("array");
     td.write("test.syaml", "---!syaml/v0\n---data\nallowed_ips:\n  - 127.0.0.1\n  - 10.0.0.1\nservice:\n  whitelist: $.allowed_ips\n");
     let out = compile(&td.file_path("test.syaml"));
-    assert_eq!(out["service"]["whitelist"], json!(["127.0.0.1", "10.0.0.1"]));
+    assert_eq!(
+        out["service"]["whitelist"],
+        json!(["127.0.0.1", "10.0.0.1"])
+    );
 }
 
 #[test]
 fn unknown_dollar_path_gives_error() {
     let td = TempDir::new("unknown");
-    td.write("test.syaml", "---!syaml/v0\n---data\nservice:\n  timeout: $.nonexistent.value\n");
+    td.write(
+        "test.syaml",
+        "---!syaml/v0\n---data\nservice:\n  timeout: $.nonexistent.value\n",
+    );
     let err = compile_err(&td.file_path("test.syaml"));
     assert!(err.contains("not found"), "expected 'not found' in: {err}");
 }
@@ -108,7 +123,10 @@ fn unknown_dollar_path_gives_error() {
 #[test]
 fn circular_reference_gives_cycle_error() {
     let td = TempDir::new("cycle");
-    td.write("test.syaml", "---!syaml/v0\n---data\na:\n  x: $.b.y\nb:\n  y: $.a.x\n");
+    td.write(
+        "test.syaml",
+        "---!syaml/v0\n---data\na:\n  x: $.b.y\nb:\n  y: $.a.x\n",
+    );
     let err = compile_err(&td.file_path("test.syaml"));
     assert!(
         err.contains("cycle") || err.contains("dependency"),
@@ -119,10 +137,62 @@ fn circular_reference_gives_cycle_error() {
 #[test]
 fn relative_reference_at_root_level_gives_error() {
     let td = TempDir::new("rootlevel");
-    td.write("test.syaml", "---!syaml/v0\n---data\nhost: localhost\naddr: .host\n");
+    td.write(
+        "test.syaml",
+        "---!syaml/v0\n---data\nhost: localhost\naddr: .host\n",
+    );
     let err = compile_err(&td.file_path("test.syaml"));
     assert!(
         err.contains("root level"),
         "expected 'root level' error in: {err}"
     );
+}
+
+#[test]
+fn keyed_enum_member_reference_resolves_for_typed_value() {
+    let td = TempDir::new("enum_member_typed");
+    td.write(
+        "test.syaml",
+        "---!syaml/v0\n---schema\nSomeType:\n  type: object\n  properties:\n    field_a: integer\n    field_b: string\nSomeEnum:\n  type: SomeType\n  enum:\n    option_1:\n      field_a: 1\n      field_b: one\n    option_2:\n      field_a: 2\n      field_b: two\n---data\nsome_data <SomeType>: SomeEnum.option_1\n",
+    );
+    let out = compile(&td.file_path("test.syaml"));
+    assert_eq!(out["some_data"], json!({"field_a": 1, "field_b": "one"}));
+}
+
+#[test]
+fn keyed_enum_member_reference_rejects_invalid_member_in_typed_context() {
+    let td = TempDir::new("enum_member_bad_typed");
+    td.write(
+        "test.syaml",
+        "---!syaml/v0\n---schema\nSomeType:\n  type: object\n  properties:\n    field_a: integer\nSomeEnum:\n  type: SomeType\n  enum:\n    option_1:\n      field_a: 1\n---data\nsome_data <SomeType>: SomeEnum.missing\n",
+    );
+    let err = compile_err(&td.file_path("test.syaml"));
+    assert!(err.contains("enum member"));
+    assert!(err.contains("missing"));
+}
+
+#[test]
+fn keyed_enum_member_reference_untyped_invalid_token_stays_string() {
+    let td = TempDir::new("enum_member_untyped");
+    td.write(
+        "test.syaml",
+        "---!syaml/v0\n---schema\nSomeType:\n  type: object\n  properties:\n    field_a: integer\nSomeEnum:\n  type: SomeType\n  enum:\n    option_1:\n      field_a: 1\n---data\nraw: SomeEnum.missing\n",
+    );
+    let out = compile(&td.file_path("test.syaml"));
+    assert_eq!(out["raw"], json!("SomeEnum.missing"));
+}
+
+#[test]
+fn keyed_enum_member_reference_resolves_for_namespaced_import_type() {
+    let td = TempDir::new("enum_member_import");
+    td.write(
+        "shared.syaml",
+        "---!syaml/v0\n---schema\nTimezone:\n  type: object\n  properties:\n    locale: string\n    offset: string\n  enum:\n    UTC:\n      locale: en-US\n      offset: '+00:00'\n---data\n{}\n",
+    );
+    td.write(
+        "root.syaml",
+        "---!syaml/v0\n---meta\nimports:\n  shared: ./shared.syaml\n---schema\n{}\n---data\ntz <shared.Timezone>: shared.Timezone.UTC\n",
+    );
+    let out = compile(&td.file_path("root.syaml"));
+    assert_eq!(out["tz"], json!({"locale": "en-US", "offset": "+00:00"}));
 }

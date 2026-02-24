@@ -194,11 +194,23 @@ x: 1
 
     let rendered = generate_typescript_types(input).unwrap();
     // field_number comment
-    assert!(rendered.contains("Field number: 1"), "missing field_number for id");
-    assert!(rendered.contains("Field number: 6"), "missing field_number for legacy_name");
+    assert!(
+        rendered.contains("Field number: 1"),
+        "missing field_number for id"
+    );
+    assert!(
+        rendered.contains("Field number: 6"),
+        "missing field_number for legacy_name"
+    );
     // @deprecated JSDoc
-    assert!(rendered.contains("@deprecated"), "missing @deprecated JSDoc");
-    assert!(rendered.contains("Use 'name' instead"), "missing deprecation message");
+    assert!(
+        rendered.contains("@deprecated"),
+        "missing @deprecated JSDoc"
+    );
+    assert!(
+        rendered.contains("Use 'name' instead"),
+        "missing deprecation message"
+    );
 }
 
 #[test]
@@ -223,10 +235,54 @@ Semver:
 ver: 1
 "#;
     let rendered = generate_typescript_types(input).unwrap();
-    assert!(rendered.contains("export function semverToString("), "missing tostring fn");
-    assert!(rendered.contains(": Semver): string {"), "missing return type");
+    assert!(
+        rendered.contains("export function semverToString("),
+        "missing tostring fn"
+    );
+    assert!(
+        rendered.contains(": Semver): string {"),
+        "missing return type"
+    );
     assert!(rendered.contains("return `"), "missing template literal");
-    assert!(rendered.contains("${semver.major}"), "missing major accessor");
-    assert!(rendered.contains("${semver.minor}"), "missing minor accessor");
-    assert!(rendered.contains("${semver.patch}"), "missing patch accessor");
+    assert!(
+        rendered.contains("${semver.major}"),
+        "missing major accessor"
+    );
+    assert!(
+        rendered.contains("${semver.minor}"),
+        "missing minor accessor"
+    );
+    assert!(
+        rendered.contains("${semver.patch}"),
+        "missing patch accessor"
+    );
+}
+
+#[test]
+fn generate_typescript_types_renders_keyed_enum_helpers() {
+    let input = r#"
+---!syaml/v0
+---schema
+TimezoneInfo:
+  type: object
+  properties:
+    locale: string
+    offset: string
+Timezone:
+  type: TimezoneInfo
+  enum:
+    UTC:
+      locale: en-US
+      offset: "+00:00"
+    EST:
+      locale: en-US
+      offset: "-05:00"
+---data
+x: 1
+"#;
+    let rendered = generate_typescript_types(input).unwrap();
+    assert!(rendered.contains("export type Timezone = TimezoneInfo;"));
+    assert!(rendered.contains("export type TimezoneKey = \"EST\" | \"UTC\";"));
+    assert!(rendered.contains("export const TimezoneMembers"));
+    assert!(rendered.contains("export function getTimezone(key: TimezoneKey): Timezone"));
 }

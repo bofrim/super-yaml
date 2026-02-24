@@ -159,11 +159,23 @@ x: 1
 
     let rendered = generate_rust_types(input).unwrap();
     // field_number doc comment
-    assert!(rendered.contains("/// Field number: 1"), "missing field_number comment for id");
-    assert!(rendered.contains("/// Field number: 6"), "missing field_number comment for legacy_name");
+    assert!(
+        rendered.contains("/// Field number: 1"),
+        "missing field_number comment for id"
+    );
+    assert!(
+        rendered.contains("/// Field number: 6"),
+        "missing field_number comment for legacy_name"
+    );
     // deprecated attribute
-    assert!(rendered.contains("#[deprecated"), "missing #[deprecated] attribute");
-    assert!(rendered.contains("Use 'name' instead"), "missing deprecation message");
+    assert!(
+        rendered.contains("#[deprecated"),
+        "missing #[deprecated] attribute"
+    );
+    assert!(
+        rendered.contains("Use 'name' instead"),
+        "missing deprecation message"
+    );
 }
 
 #[test]
@@ -188,9 +200,44 @@ Semver:
 ver: 1
 "#;
     let rendered = generate_rust_types(input).unwrap();
-    assert!(rendered.contains("impl std::fmt::Display for Semver {"), "missing Display impl");
-    assert!(rendered.contains("fn fmt(&self, f: &mut std::fmt::Formatter"), "missing fmt fn");
+    assert!(
+        rendered.contains("impl std::fmt::Display for Semver {"),
+        "missing Display impl"
+    );
+    assert!(
+        rendered.contains("fn fmt(&self, f: &mut std::fmt::Formatter"),
+        "missing fmt fn"
+    );
     assert!(rendered.contains("self.major"), "missing major accessor");
     assert!(rendered.contains("self.minor"), "missing minor accessor");
     assert!(rendered.contains("self.patch"), "missing patch accessor");
+}
+
+#[test]
+fn generate_rust_types_renders_keyed_enum_helpers() {
+    let input = r#"
+---!syaml/v0
+---schema
+TimezoneInfo:
+  type: object
+  properties:
+    locale: string
+    offset: string
+Timezone:
+  type: TimezoneInfo
+  enum:
+    UTC:
+      locale: en-US
+      offset: "+00:00"
+    EST:
+      locale: en-US
+      offset: "-05:00"
+---data
+x: 1
+"#;
+    let rendered = generate_rust_types(input).unwrap();
+    assert!(rendered.contains("pub type Timezone = TimezoneInfo;"));
+    assert!(rendered.contains("pub enum TimezoneKey"));
+    assert!(rendered.contains("pub fn value(&self) -> Timezone"));
+    assert!(rendered.contains("pub fn timezone_value(key: TimezoneKey) -> Timezone"));
 }

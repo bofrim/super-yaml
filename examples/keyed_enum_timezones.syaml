@@ -1,0 +1,31 @@
+---!syaml/v0
+---schema
+TimezoneInfo:
+  type: object
+  properties:
+    tz_identifier: string
+    offset: string
+    abbreviation: string
+
+Timezone:
+  type: TimezoneInfo
+  enum:
+    UTC:
+      tz_identifier: UTC
+      offset: "+00:00"
+      abbreviation: UTC
+    PST:
+      tz_identifier: America/Los_Angeles
+      offset: "-08:00"
+      abbreviation: PST
+    CET:
+      tz_identifier: Europe/Paris
+      offset: "+01:00"
+      abbreviation: CET
+    IST:
+      tz_identifier: Asia/Kolkata
+      offset: "+05:30"
+      abbreviation: IST
+---data
+default_tz <TimezoneInfo>: Timezone.UTC
+west_coast_tz <TimezoneInfo>: Timezone.PST

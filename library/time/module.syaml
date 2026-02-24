@@ -50,18 +50,178 @@ TimeDirections:
   - past
   - future
 
-Timezones:
-  - America/New_York
-  - America/Los_Angeles
-  - Europe/London
-  - UTC
+TimezoneIdentifiers:
+  - "UTC"
+  - "America/New_York"
+  - "America/Chicago"
+  - "America/Denver"
+  - "America/Los_Angeles"
+  - "Europe/London"
+  - "Europe/Paris"
+  - "Europe/Athens"
+  - "Asia/Kolkata"
+  - "Asia/Tokyo"
+  - "Australia/Sydney"
+  - "Australia/Adelaide"
+  - "Pacific/Auckland"
+  - "Africa/Johannesburg"
+  - "America/Sao_Paulo"
 
-Timezone:
+TimezoneAbbreviations:
+  - UTC
+  - GMT
+  - BST
+  - EST
+  - EDT
+  - CST
+  - CDT
+  - MST
+  - MDT
+  - PST
+  - PDT
+  - CET
+  - CEST
+  - EET
+  - EEST
+  - IST
+  - JST
+  - AEST
+  - AEDT
+  - ACST
+  - ACDT
+  - NZST
+  - NZDT
+  - SAST
+  - BRT
+
+OffsetSign:
+  - "+"
+  - "-"
+
+UtcOffset:
   type: object
   properties:
-    locale: Timezones
-    abbreviation: string
-    offset: string
+    sign: OffsetSign
+    hours: prim.NonNegativeInteger
+    minutes: prim.NonNegativeInteger
+  constructors:
+    from_string:
+      regex: '^(?<sign>[+-])(?<hours>\d{2}):(?<minutes>\d{2})$'
+      map:
+        sign:
+          group: sign
+          from_enum: OffsetSign
+        hours:
+          group: hours
+          decode: integer
+        minutes:
+          group: minutes
+          decode: integer
+  constraints:
+    - "hours <= 14"
+    - "minutes <= 59"
+
+TimezoneOffsetSet:
+  type: object
+  properties:
+    sdt: UtcOffset
+    dst: UtcOffset?
+
+TimezoneInfo:
+  type: object
+  properties:
+    tz_identifier: TimezoneIdentifiers
+    abbreviation: TimezoneAbbreviations
+    offset: TimezoneOffsetSet
+
+Timezone:
+  type: TimezoneInfo
+  enum:
+    UTC:
+      tz_identifier: UTC
+      abbreviation: UTC
+      offset:
+        sdt: { sign: "+", hours: 0, minutes: 0 }
+    NEW_YORK:
+      tz_identifier: America/New_York
+      abbreviation: EST
+      offset:
+        sdt: { sign: "-", hours: 5, minutes: 0 }
+        dst: { sign: "-", hours: 4, minutes: 0 }
+    CHICAGO:
+      tz_identifier: America/Chicago
+      abbreviation: CST
+      offset:
+        sdt: { sign: "-", hours: 6, minutes: 0 }
+        dst: { sign: "-", hours: 5, minutes: 0 }
+    DENVER:
+      tz_identifier: America/Denver
+      abbreviation: MST
+      offset:
+        sdt: { sign: "-", hours: 7, minutes: 0 }
+        dst: { sign: "-", hours: 6, minutes: 0 }
+    LOS_ANGELES:
+      tz_identifier: America/Los_Angeles
+      abbreviation: PST
+      offset:
+        sdt: { sign: "-", hours: 8, minutes: 0 }
+        dst: { sign: "-", hours: 7, minutes: 0 }
+    LONDON:
+      tz_identifier: Europe/London
+      abbreviation: GMT
+      offset:
+        sdt: { sign: "+", hours: 0, minutes: 0 }
+        dst: { sign: "+", hours: 1, minutes: 0 }
+    PARIS:
+      tz_identifier: Europe/Paris
+      abbreviation: CET
+      offset:
+        sdt: { sign: "+", hours: 1, minutes: 0 }
+        dst: { sign: "+", hours: 2, minutes: 0 }
+    ATHENS:
+      tz_identifier: Europe/Athens
+      abbreviation: EET
+      offset:
+        sdt: { sign: "+", hours: 2, minutes: 0 }
+        dst: { sign: "+", hours: 3, minutes: 0 }
+    KOLKATA:
+      tz_identifier: Asia/Kolkata
+      abbreviation: IST
+      offset:
+        sdt: { sign: "+", hours: 5, minutes: 30 }
+    TOKYO:
+      tz_identifier: Asia/Tokyo
+      abbreviation: JST
+      offset:
+        sdt: { sign: "+", hours: 9, minutes: 0 }
+    SYDNEY:
+      tz_identifier: Australia/Sydney
+      abbreviation: AEST
+      offset:
+        sdt: { sign: "+", hours: 10, minutes: 0 }
+        dst: { sign: "+", hours: 11, minutes: 0 }
+    ADELAIDE:
+      tz_identifier: Australia/Adelaide
+      abbreviation: ACST
+      offset:
+        sdt: { sign: "+", hours: 9, minutes: 30 }
+        dst: { sign: "+", hours: 10, minutes: 30 }
+    AUCKLAND:
+      tz_identifier: Pacific/Auckland
+      abbreviation: NZST
+      offset:
+        sdt: { sign: "+", hours: 12, minutes: 0 }
+        dst: { sign: "+", hours: 13, minutes: 0 }
+    JOHANNESBURG:
+      tz_identifier: Africa/Johannesburg
+      abbreviation: SAST
+      offset:
+        sdt: { sign: "+", hours: 2, minutes: 0 }
+    SAO_PAULO:
+      tz_identifier: America/Sao_Paulo
+      abbreviation: BRT
+      offset:
+        sdt: { sign: "-", hours: 3, minutes: 0 }
 
 IsoDate:
   type: string

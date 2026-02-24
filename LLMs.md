@@ -292,6 +292,43 @@ Config:
 
 Both expand to `{ type: string, enum: [...] }`.
 
+### Keyed enums with typed values
+
+You can define enums as a keyed object map where each member is a fully typed value:
+
+```yaml
+---schema
+TimezoneInfo:
+  type: object
+  properties:
+    locale: string
+    offset: string
+
+Timezone:
+  type: TimezoneInfo
+  enum:
+    UTC:
+      locale: en-US
+      offset: "+00:00"
+    EST:
+      locale: en-US
+      offset: "-05:00"
+```
+
+Rules:
+- `enum` may be either an array (classic enum) or an object map (keyed enum).
+- For keyed enums, keys must match `[A-Za-z_][A-Za-z0-9_]*`.
+- Each keyed-enum value must validate against the schema node's declared `type`.
+
+In `---data`, you can reference keyed enum members using exact `Type.member` tokens:
+
+```yaml
+---data
+tz <TimezoneInfo>: Timezone.UTC
+```
+
+`Type.member` references are resolved to the concrete member value during compilation.
+
 ### Object types
 
 ```yaml

@@ -15,7 +15,10 @@ use serde_json::Value as JsonValue;
 
 use crate::ast::SchemaDoc;
 use crate::error::SyamlError;
-use crate::expr::{parse_expression, parser::{Expr, BinaryOp}};
+use crate::expr::{
+    parse_expression,
+    parser::{BinaryOp, Expr},
+};
 
 const MAX_SCHEMA_VALIDATION_DEPTH: usize = 64;
 
@@ -118,6 +121,7 @@ fn validate_schema_type_references_inner(
         JsonValue::Object(map) => {
             validate_constructor_keywords(map, path, types)?;
             validate_as_string_keyword(map, path)?;
+            validate_keyed_enum_members(map, path, types)?;
             for (key, child) in map {
                 let child_path = format!("{path}.{key}");
                 if key == "type" {
@@ -146,6 +150,46 @@ fn validate_schema_type_references_inner(
             }
         }
         _ => {}
+    }
+
+    Ok(())
+}
+
+fn validate_keyed_enum_members(
+    schema: &serde_json::Map<String, JsonValue>,
+    path: &str,
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
+    let Some(enum_value) = schema.get("enum") else {
+        return Ok(());
+    };
+    if enum_value.is_array() {
+        return Ok(());
+    }
+
+    let enum_map = enum_value.as_object().ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "schema 'enum' at {path} must be an array or object"
+        ))
+    })?;
+    let declared_type = schema
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "schema at {path} must declare a string 'type' when using keyed enum values"
+            ))
+        })?;
+    let base_schema = serde_json::json!({ "type": declared_type });
+    for (member_key, member_value) in enum_map {
+        if !is_valid_enum_member_key(member_key) {
+            return Err(SyamlError::SchemaError(format!(
+                "invalid enum member key '{}' at {}.enum: keys must match [A-Za-z_][A-Za-z0-9_]*",
+                member_key, path
+            )));
+        }
+        let member_path = format!("{path}.enum.{member_key}");
+        validate_json_against_schema_with_types(member_value, &base_schema, &member_path, types)?;
     }
 
     Ok(())
@@ -265,10 +309,7 @@ fn expand_extends_types(
 
     if order.len() != degree.len() {
         // Cycle detected — collect involved type names.
-        let cycle_nodes: Vec<String> = degree
-            .into_keys()
-            .filter(|k| !order.contains(k))
-            .collect();
+        let cycle_nodes: Vec<String> = degree.into_keys().filter(|k| !order.contains(k)).collect();
         let mut sorted = cycle_nodes;
         sorted.sort();
         return Err(SyamlError::SchemaError(format!(
@@ -341,12 +382,22 @@ fn expand_extends_types(
         let parent_required: Vec<String> = parent_obj
             .get("required")
             .and_then(JsonValue::as_array)
-            .map(|a| a.iter().filter_map(JsonValue::as_str).map(String::from).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default();
         let child_required: Vec<String> = child_obj
             .get("required")
             .and_then(JsonValue::as_array)
-            .map(|a| a.iter().filter_map(JsonValue::as_str).map(String::from).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default();
         let mut merged_required: Vec<String> = parent_required;
         for r in child_required {
@@ -384,12 +435,18 @@ fn expand_extends_types(
             );
         }
         if !merged_constraints.is_empty() {
-            expanded.insert("constraints".to_string(), JsonValue::Array(merged_constraints));
+            expanded.insert(
+                "constraints".to_string(),
+                JsonValue::Array(merged_constraints),
+            );
         }
         // Copy over any other child-level keys (mutability, constructors, etc.) excluding
         // keys we've already handled.
         for (k, v) in child_obj {
-            if !matches!(k.as_str(), "type" | "properties" | "required" | "constraints") {
+            if !matches!(
+                k.as_str(),
+                "type" | "properties" | "required" | "constraints"
+            ) {
                 expanded.insert(k.clone(), v.clone());
             }
         }
@@ -678,9 +735,9 @@ fn validate_as_string_keyword(
         )));
     }
 
-    let template = raw_as_string.as_str().ok_or_else(|| {
-        SyamlError::SchemaError(format!("as_string at {path} must be a string"))
-    })?;
+    let template = raw_as_string
+        .as_str()
+        .ok_or_else(|| SyamlError::SchemaError(format!("as_string at {path} must be a string")))?;
     if template.is_empty() {
         return Err(SyamlError::SchemaError(format!(
             "as_string at {path} must not be empty"
@@ -735,22 +792,47 @@ fn validate_constructor_from_enum_reference(
             enum_type_name, path
         ))
     })?;
-    let enum_values = enum_obj
-        .get("enum")
-        .and_then(JsonValue::as_array)
-        .ok_or_else(|| {
-            SyamlError::SchemaError(format!(
-                "referenced type '{}' at {} must declare an enum array",
-                enum_type_name, path
-            ))
-        })?;
-    if enum_values.iter().any(|v| !v.is_string()) {
-        return Err(SyamlError::SchemaError(format!(
-            "referenced enum type '{}' at {} must contain only strings",
+    let enum_values = enum_obj.get("enum").ok_or_else(|| {
+        SyamlError::SchemaError(format!(
+            "referenced type '{}' at {} must declare an enum array or object",
             enum_type_name, path
-        )));
+        ))
+    })?;
+    if let Some(arr) = enum_values.as_array() {
+        if arr.iter().any(|v| !v.is_string()) {
+            return Err(SyamlError::SchemaError(format!(
+                "referenced enum type '{}' at {} must contain only strings",
+                enum_type_name, path
+            )));
+        }
+        return Ok(());
     }
-    Ok(())
+    if let Some(map) = enum_values.as_object() {
+        for key in map.keys() {
+            if !is_valid_enum_member_key(key) {
+                return Err(SyamlError::SchemaError(format!(
+                    "invalid enum member key '{}' in referenced enum type '{}' at {}: keys must match [A-Za-z_][A-Za-z0-9_]*",
+                    key, enum_type_name, path
+                )));
+            }
+        }
+        return Ok(());
+    }
+    Err(SyamlError::SchemaError(format!(
+        "referenced type '{}' at {} must declare an enum array or object",
+        enum_type_name, path
+    )))
+}
+
+fn is_valid_enum_member_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn validate_decode_name(name: &str, path: &str) -> Result<(), SyamlError> {
@@ -1012,7 +1094,14 @@ fn validate_type_constraint_variable_scope(
             }
 
             // Validate constraint operations against schema types
-            validate_constraint_operations(&ast, scope_schema, expression, type_name, constraint_path, types)?;
+            validate_constraint_operations(
+                &ast,
+                scope_schema,
+                expression,
+                type_name,
+                constraint_path,
+                types,
+            )?;
         }
     }
 
@@ -1069,12 +1158,33 @@ fn validate_constraint_operations(
             }
 
             // Recursively validate sub-expressions
-            validate_constraint_operations(left, scope_schema, expression, type_name, constraint_path, types)?;
-            validate_constraint_operations(right, scope_schema, expression, type_name, constraint_path, types)?;
+            validate_constraint_operations(
+                left,
+                scope_schema,
+                expression,
+                type_name,
+                constraint_path,
+                types,
+            )?;
+            validate_constraint_operations(
+                right,
+                scope_schema,
+                expression,
+                type_name,
+                constraint_path,
+                types,
+            )?;
         }
         Expr::Unary { expr: inner, .. } => {
             // Recursively validate inner expression
-            validate_constraint_operations(inner, scope_schema, expression, type_name, constraint_path, types)?;
+            validate_constraint_operations(
+                inner,
+                scope_schema,
+                expression,
+                type_name,
+                constraint_path,
+                types,
+            )?;
         }
         Expr::Call { name, args } => {
             // Handle known functions that return specific types
@@ -1089,7 +1199,14 @@ fn validate_constraint_operations(
 
             // Validate arguments
             for arg in args {
-                validate_constraint_operations(arg, scope_schema, expression, type_name, constraint_path, types)?;
+                validate_constraint_operations(
+                    arg,
+                    scope_schema,
+                    expression,
+                    type_name,
+                    constraint_path,
+                    types,
+                )?;
             }
         }
         _ => {
@@ -1105,7 +1222,6 @@ fn infer_expression_type(
     scope_schema: &JsonValue,
     types: &BTreeMap<String, JsonValue>,
 ) -> Option<String> {
-
     match expr {
         Expr::Var(path) => {
             if path.is_empty() {
@@ -1121,7 +1237,9 @@ fn infer_expression_type(
                 for segment in path {
                     if let Some(obj) = current_schema.as_object() {
                         if let Some(props) = obj.get("properties") {
-                            if let Some(prop_schema) = props.as_object().and_then(|p| p.get(segment)) {
+                            if let Some(prop_schema) =
+                                props.as_object().and_then(|p| p.get(segment))
+                            {
                                 current_schema = prop_schema;
                                 continue;
                             }
@@ -1164,7 +1282,7 @@ fn infer_expression_type(
             match name.as_str() {
                 "len" => Some("number".to_string()), // len() returns a number
                 "min" | "max" => Some("number".to_string()), // min/max return numbers
-                _ => None, // Unknown function return type
+                _ => None,                           // Unknown function return type
             }
         }
         Expr::Number(_) => Some("number".to_string()),
@@ -1212,7 +1330,6 @@ fn infer_schema_type(schema: &JsonValue, types: &BTreeMap<String, JsonValue>) ->
 fn is_numeric_type(type_name: &Option<String>) -> bool {
     matches!(type_name.as_deref(), Some("number") | Some("integer"))
 }
-
 
 fn op_symbol(op: BinaryOp) -> &'static str {
     match op {
@@ -1479,12 +1596,21 @@ fn validate_json_against_schema_inner(
     }
 
     if let Some(enum_value) = schema_obj.get("enum") {
-        let options = enum_value.as_array().ok_or_else(|| {
-            SyamlError::SchemaError(format!("schema 'enum' at {path} must be an array"))
-        })?;
-        if !options.iter().any(|candidate| candidate == value) {
+        if let Some(options) = enum_value.as_array() {
+            if !options.iter().any(|candidate| candidate == value) {
+                return Err(SyamlError::SchemaError(format!(
+                    "enum mismatch at {path}: value {value} not in enum set"
+                )));
+            }
+        } else if let Some(options) = enum_value.as_object() {
+            if !options.values().any(|candidate| candidate == value) {
+                return Err(SyamlError::SchemaError(format!(
+                    "enum mismatch at {path}: value {value} not in enum set"
+                )));
+            }
+        } else {
             return Err(SyamlError::SchemaError(format!(
-                "enum mismatch at {path}: value {value} not in enum set"
+                "schema 'enum' at {path} must be an array or object"
             )));
         }
     }
@@ -1999,9 +2125,7 @@ pub fn parse_field_version_meta(
 
     let field_number = if let Some(fn_val) = obj.get("field_number") {
         let n = fn_val.as_u64().ok_or_else(|| {
-            SyamlError::SchemaError(
-                "'field_number' must be a positive integer".to_string(),
-            )
+            SyamlError::SchemaError("'field_number' must be a positive integer".to_string())
         })?;
         if n == 0 {
             return Err(SyamlError::SchemaError(
@@ -2087,9 +2211,7 @@ fn parse_deprecation_info(value: &JsonValue) -> Result<DeprecationInfo, SyamlErr
 
             let severity = if let Some(sev_val) = map.get("severity") {
                 let sev_str = sev_val.as_str().ok_or_else(|| {
-                    SyamlError::SchemaError(
-                        "'deprecated.severity' must be a string".to_string(),
-                    )
+                    SyamlError::SchemaError("'deprecated.severity' must be a string".to_string())
                 })?;
                 match sev_str {
                     "warning" => DeprecationSeverity::Warning,
@@ -2145,9 +2267,7 @@ pub fn validate_versioned_field_annotations(
             let meta = parse_field_version_meta(prop_schema).map_err(|e| {
                 SyamlError::SchemaError(format!(
                     "schema.{}.properties.{}: {}",
-                    type_name,
-                    prop_name,
-                    e
+                    type_name, prop_name, e
                 ))
             })?;
             if let Some(meta) = meta {
@@ -2170,7 +2290,9 @@ pub fn validate_versioned_field_annotations(
 ///
 /// This is called when `meta.file.strict_field_numbers: true` is set. It covers all types
 /// including those merged from imported documents.
-pub fn validate_strict_field_numbers(types: &BTreeMap<String, JsonValue>) -> Result<(), SyamlError> {
+pub fn validate_strict_field_numbers(
+    types: &BTreeMap<String, JsonValue>,
+) -> Result<(), SyamlError> {
     for (type_name, type_schema) in types {
         let Some(obj) = type_schema.as_object() else {
             continue;
@@ -2204,9 +2326,9 @@ pub fn parse_mutability_mode(schema_node: &JsonValue) -> Result<MutabilityMode, 
     let raw = obj.get("mutability").ok_or_else(|| {
         SyamlError::MutabilityError("no mutability keyword found on schema node".to_string())
     })?;
-    let s = raw.as_str().ok_or_else(|| {
-        SyamlError::MutabilityError("mutability must be a string".to_string())
-    })?;
+    let s = raw
+        .as_str()
+        .ok_or_else(|| SyamlError::MutabilityError("mutability must be a string".to_string()))?;
     match s {
         "frozen" => Ok(MutabilityMode::Frozen),
         "replace" => Ok(MutabilityMode::Replace),
@@ -2281,7 +2403,11 @@ pub fn resolve_mutability_for_path(
     // First look for direct type hint on this path
     if let Some(type_name) = type_hints.get(path) {
         if let Some(schema_node) = schema.types.get(type_name.as_str()) {
-            if schema_node.as_object().and_then(|o| o.get("mutability")).is_some() {
+            if schema_node
+                .as_object()
+                .and_then(|o| o.get("mutability"))
+                .is_some()
+            {
                 return parse_mutability_mode(schema_node);
             }
         }
@@ -2292,7 +2418,11 @@ pub fn resolve_mutability_for_path(
         let parent_path: String = segments[..len].join(".");
         if let Some(type_name) = type_hints.get(&parent_path) {
             if let Some(schema_node) = schema.types.get(type_name.as_str()) {
-                if schema_node.as_object().and_then(|o| o.get("mutability")).is_some() {
+                if schema_node
+                    .as_object()
+                    .and_then(|o| o.get("mutability"))
+                    .is_some()
+                {
                     return parse_mutability_mode(schema_node);
                 }
             }
@@ -2339,11 +2469,7 @@ mod tests {
         });
         let doc = parse(schema);
         let exprs = &doc.type_constraints["EvenNum"]["$"];
-        assert!(
-            exprs.contains(&"value % 2 == 0".to_string()),
-            "{:?}",
-            exprs
-        );
+        assert!(exprs.contains(&"value % 2 == 0".to_string()), "{:?}", exprs);
     }
 
     #[test]
@@ -2458,16 +2584,8 @@ mod tests {
         });
         let doc = parse(schema);
         let exprs = &doc.type_constraints["Rate"]["$"];
-        assert!(
-            exprs.contains(&"value >= 0.5".to_string()),
-            "{:?}",
-            exprs
-        );
-        assert!(
-            exprs.contains(&"value <= 1".to_string()),
-            "{:?}",
-            exprs
-        );
+        assert!(exprs.contains(&"value >= 0.5".to_string()), "{:?}", exprs);
+        assert!(exprs.contains(&"value <= 1".to_string()), "{:?}", exprs);
     }
 
     #[test]
@@ -2531,7 +2649,13 @@ mod tests {
             }
         });
         let doc = parse(schema);
-        let ext = doc.types.get("Extended").unwrap().as_object().unwrap().clone();
+        let ext = doc
+            .types
+            .get("Extended")
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
         let props = ext["properties"].as_object().unwrap();
         assert!(props.contains_key("id"));
         assert!(props.contains_key("extra"));
@@ -2641,8 +2765,14 @@ mod tests {
         let doc = parse(schema);
         let c = doc.types.get("C").unwrap().as_object().unwrap().clone();
         let props = c["properties"].as_object().unwrap();
-        assert!(props.contains_key("a_field"), "C should inherit a_field from A");
-        assert!(props.contains_key("b_field"), "C should inherit b_field from B");
+        assert!(
+            props.contains_key("a_field"),
+            "C should inherit a_field from A"
+        );
+        assert!(
+            props.contains_key("b_field"),
+            "C should inherit b_field from B"
+        );
         assert!(props.contains_key("c_field"), "C should have own c_field");
     }
 

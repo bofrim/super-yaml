@@ -344,3 +344,52 @@ memory <MemorySpec>: 16TiB
     assert!(err.contains("is not in enum"));
     assert!(err.contains("MemoryUnit"));
 }
+
+#[test]
+fn constructor_from_enum_accepts_keyed_enum_member_keys() {
+    let input = r#"
+---!syaml/v0
+---schema
+SizeClass:
+  type: string
+  enum:
+    small: S
+    medium: M
+Shirt:
+  type: object
+  properties:
+    size_key: string
+  constructors:
+    from_text: { regex: '^(?<size_key>[A-Za-z]+)$', map: { size_key: { group: size_key, from_enum: SizeClass } } }
+---data
+shirt <Shirt>: medium
+"#;
+    let compiled = compile(input);
+    assert_eq!(compiled["shirt"]["size_key"], json!("medium"));
+}
+
+#[test]
+fn constructor_from_enum_rejects_unknown_key_for_keyed_enum() {
+    let input = r#"
+---!syaml/v0
+---schema
+SizeClass:
+  type: string
+  enum:
+    small: S
+    medium: M
+Shirt:
+  type: object
+  properties:
+    size_key: string
+  constructors:
+    from_text: { regex: '^(?<size_key>[A-Za-z]+)$', map: { size_key: { group: size_key, from_enum: SizeClass } } }
+---data
+shirt <Shirt>: large
+"#;
+    let err = compile_document(input, &env_provider(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("is not in enum"));
+    assert!(err.contains("SizeClass"));
+}
