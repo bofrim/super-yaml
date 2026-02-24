@@ -104,7 +104,7 @@ cargo run --bin super-yaml -- compile examples/type_composition.syaml --format t
 
 ## Document Structure
 
-Every `.syaml` file starts with a version marker and is organized into three optional sections: `meta`, `schema`, and `data`. The sections can appear in any order, and each section appears at most once.
+Every `.syaml` file starts with a version marker and is organized into four optional sections: `meta`, `schema`, `data`, and `contracts`. The sections can appear in any order, and each section appears at most once.
 
 ```yaml
 ---!syaml/v0
@@ -127,6 +127,11 @@ Port:
 ---data
 host <string>: "${env.DB_HOST}"
 port <Port>: 5432
+
+---contracts
+OpenConnection:
+  inputs:
+    timeout_ms: integer
 ```
 
 **Marker** — The first non-empty line must be `---!syaml/v0`. If it's missing or different, parsing fails immediately.
@@ -136,6 +141,8 @@ port <Port>: 5432
 **`schema`** — Named type definitions used for validation. Each top-level key defines a type that can be referenced from `data` via type hints.
 
 **`data`** — The configuration values. Keys can carry inline type hints (`key <TypeName>`), values can be expressions (`=expr`) or interpolated strings (`${expr}`), and entire subtrees can be stamped out from templates.
+
+**`contracts`** — Optional function contracts with typed inputs/outputs, data permissions, and pre/postconditions. These can be emitted with `--contracts-json` and used for Rust/TypeScript stub generation.
 
 ## Features
 

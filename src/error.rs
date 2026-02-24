@@ -56,9 +56,9 @@ pub enum SyamlError {
     /// HTTP fetch or remote-import failure.
     #[error("fetch error: {0}")]
     FetchError(String),
-    /// Parse or validation error in the `---functional` section.
-    #[error("functional error: {0}")]
-    FunctionalError(String),
+    /// Parse or validation error in the `---contracts` section.
+    #[error("contracts error: {0}")]
+    ContractsError(String),
     /// Invalid mutability keyword usage in `---schema`.
     #[error("mutability error: {0}")]
     MutabilityError(String),

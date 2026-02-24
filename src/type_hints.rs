@@ -77,7 +77,13 @@ fn normalize_value(
             let mut out = Vec::with_capacity(items.len());
             for (i, item) in items.iter().enumerate() {
                 let child_path = format!("{}[{}]", path, i);
-                out.push(normalize_value(item, &child_path, hints, freeze_markers, depth + 1)?);
+                out.push(normalize_value(
+                    item,
+                    &child_path,
+                    hints,
+                    freeze_markers,
+                    depth + 1,
+                )?);
             }
             Ok(JsonValue::Array(out))
         }

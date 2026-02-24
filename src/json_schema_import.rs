@@ -22,10 +22,7 @@ pub fn from_json_schema(input: &str) -> Result<String, SyamlError> {
 /// Converts a JSON Schema file to a `.syaml` document string.
 pub fn from_json_schema_path(path: impl AsRef<Path>) -> Result<String, SyamlError> {
     let input = fs::read_to_string(path.as_ref()).map_err(|e| {
-        SyamlError::SchemaError(format!(
-            "failed to read '{}': {e}",
-            path.as_ref().display()
-        ))
+        SyamlError::SchemaError(format!("failed to read '{}': {e}", path.as_ref().display()))
     })?;
     from_json_schema(&input)
 }
@@ -78,9 +75,9 @@ struct SchemaEntry {
 // ── Top-level conversion ────────────────────────────────────────────────────
 
 fn convert_json_schema_document(root: &JsonValue) -> Result<String, SyamlError> {
-    let obj = root.as_object().ok_or_else(|| {
-        SyamlError::SchemaError("JSON Schema root must be an object".to_string())
-    })?;
+    let obj = root
+        .as_object()
+        .ok_or_else(|| SyamlError::SchemaError("JSON Schema root must be an object".to_string()))?;
 
     // Collect $defs and definitions into one map.
     let mut defs = JsonMap::new();
@@ -243,33 +240,34 @@ fn convert_string_schema(obj: &JsonMap<String, JsonValue>) -> Result<JsonValue, 
     let mut out = JsonMap::new();
 
     // format → pattern + comment
-    let (format_comment, format_pattern) = if let Some(fmt) = obj.get("format").and_then(|v| v.as_str()) {
-        match fmt {
-            "email" => (
-                Some("JSON Schema format: email".to_string()),
-                Some(r"^[^@]+@[^@]+\.[^@]+$".to_string()),
-            ),
-            "uri" | "url" => (
-                Some(format!("JSON Schema format: {fmt}")),
-                Some(r"^https?://".to_string()),
-            ),
-            "date-time" => (
-                Some("JSON Schema format: date-time".to_string()),
-                Some(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}".to_string()),
-            ),
-            "date" => (
-                Some("JSON Schema format: date".to_string()),
-                Some(r"^\d{4}-\d{2}-\d{2}$".to_string()),
-            ),
-            "time" => (
-                Some("JSON Schema format: time".to_string()),
-                Some(r"^\d{2}:\d{2}:\d{2}".to_string()),
-            ),
-            other => (Some(format!("JSON Schema format: {other}")), None),
-        }
-    } else {
-        (None, None)
-    };
+    let (format_comment, format_pattern) =
+        if let Some(fmt) = obj.get("format").and_then(|v| v.as_str()) {
+            match fmt {
+                "email" => (
+                    Some("JSON Schema format: email".to_string()),
+                    Some(r"^[^@]+@[^@]+\.[^@]+$".to_string()),
+                ),
+                "uri" | "url" => (
+                    Some(format!("JSON Schema format: {fmt}")),
+                    Some(r"^https?://".to_string()),
+                ),
+                "date-time" => (
+                    Some("JSON Schema format: date-time".to_string()),
+                    Some(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}".to_string()),
+                ),
+                "date" => (
+                    Some("JSON Schema format: date".to_string()),
+                    Some(r"^\d{4}-\d{2}-\d{2}$".to_string()),
+                ),
+                "time" => (
+                    Some("JSON Schema format: time".to_string()),
+                    Some(r"^\d{2}:\d{2}:\d{2}".to_string()),
+                ),
+                other => (Some(format!("JSON Schema format: {other}")), None),
+            }
+        } else {
+            (None, None)
+        };
 
     let has_constraints = obj.contains_key("minLength")
         || obj.contains_key("maxLength")
@@ -318,7 +316,13 @@ fn convert_numeric_schema(
 
     let mut out = JsonMap::new();
     out.insert("type".to_string(), json_str(type_str));
-    for key in &["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"] {
+    for key in &[
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+    ] {
         if let Some(v) = obj.get(*key) {
             out.insert(key.to_string(), v.clone());
         }
@@ -357,7 +361,10 @@ fn convert_object_schema(
         return Ok(JsonValue::Object(out));
     }
 
-    let props = obj["properties"].as_object().map(|m| m.clone()).unwrap_or_default();
+    let props = obj["properties"]
+        .as_object()
+        .map(|m| m.clone())
+        .unwrap_or_default();
 
     let mut out = JsonMap::new();
     out.insert("type".to_string(), json_str("object"));
@@ -490,7 +497,10 @@ fn extract_nullable(schema: &JsonValue) -> (JsonValue, bool) {
 
     // Check type array like ["string", "null"]
     if let Some(JsonValue::Array(types)) = obj.get("type") {
-        let non_null: Vec<&JsonValue> = types.iter().filter(|v| v.as_str() != Some("null")).collect();
+        let non_null: Vec<&JsonValue> = types
+            .iter()
+            .filter(|v| v.as_str() != Some("null"))
+            .collect();
         let has_null = types.iter().any(|v| v.as_str() == Some("null"));
         if has_null && non_null.len() == 1 {
             let mut new_obj = obj.clone();
@@ -505,12 +515,13 @@ fn extract_nullable(schema: &JsonValue) -> (JsonValue, bool) {
 
     // anyOf with null
     if let Some(JsonValue::Array(any_of)) = obj.get("anyOf") {
-        let non_null: Vec<&JsonValue> = any_of.iter().filter(|v| {
-            v.get("type").and_then(|t| t.as_str()) != Some("null")
-        }).collect();
-        let has_null = any_of.iter().any(|v| {
-            v.get("type").and_then(|t| t.as_str()) == Some("null")
-        });
+        let non_null: Vec<&JsonValue> = any_of
+            .iter()
+            .filter(|v| v.get("type").and_then(|t| t.as_str()) != Some("null"))
+            .collect();
+        let has_null = any_of
+            .iter()
+            .any(|v| v.get("type").and_then(|t| t.as_str()) == Some("null"));
         if has_null && non_null.len() == 1 {
             return ((*non_null[0]).clone(), true);
         }
@@ -580,12 +591,13 @@ fn convert_union(
         .ok_or_else(|| SyamlError::SchemaError("anyOf/oneOf must be an array".to_string()))?;
 
     // Check if this is actually a nullable pattern (T | null)
-    let non_null: Vec<&JsonValue> = arr.iter().filter(|v| {
-        v.get("type").and_then(|t| t.as_str()) != Some("null")
-    }).collect();
-    let has_null = arr.iter().any(|v| {
-        v.get("type").and_then(|t| t.as_str()) == Some("null")
-    });
+    let non_null: Vec<&JsonValue> = arr
+        .iter()
+        .filter(|v| v.get("type").and_then(|t| t.as_str()) != Some("null"))
+        .collect();
+    let has_null = arr
+        .iter()
+        .any(|v| v.get("type").and_then(|t| t.as_str()) == Some("null"));
 
     if has_null && non_null.len() == 1 {
         let mut entry = convert_schema_inner(non_null[0], hint_name, ctx)?;
@@ -631,14 +643,20 @@ fn convert_all_of(
     for member in arr {
         let resolved = if let Some(ref_str) = member.get("$ref").and_then(|v| v.as_str()) {
             let name = resolve_ref_name(ref_str);
-            ctx.defs.get(&name).cloned().unwrap_or_else(|| member.clone())
+            ctx.defs
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| member.clone())
         } else {
             member.clone()
         };
 
         let resolved_obj = match resolved.as_object() {
             Some(o) => o.clone(),
-            None => { can_merge = false; break; }
+            None => {
+                can_merge = false;
+                break;
+            }
         };
 
         // Must be an object type or have properties.
@@ -941,9 +959,16 @@ fn render_object_block(m: &JsonMap<String, JsonValue>, indent: usize, out: &mut 
 
     // Numeric/string/array constraints
     for key in &[
-        "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
-        "minLength", "maxLength", "pattern",
-        "minItems", "maxItems",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
     ] {
         if let Some(v) = m.get(*key) {
             match v {
@@ -955,12 +980,7 @@ fn render_object_block(m: &JsonMap<String, JsonValue>, indent: usize, out: &mut 
     }
 }
 
-fn render_property_entry(
-    name: &str,
-    schema: &JsonValue,
-    indent: usize,
-    out: &mut String,
-) {
+fn render_property_entry(name: &str, schema: &JsonValue, indent: usize, out: &mut String) {
     let pad = " ".repeat(indent);
 
     // Inline shorthand (e.g. "string", "Foo", "Foo?")
@@ -973,8 +993,8 @@ fn render_property_entry(
             // Check for optional inline shorthand
             let type_val = m.get("type");
             let is_optional = m.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
-            let only_type_and_optional = m.len() <= 2
-                && m.keys().all(|k| k == "type" || k == "optional");
+            let only_type_and_optional =
+                m.len() <= 2 && m.keys().all(|k| k == "type" || k == "optional");
 
             if only_type_and_optional {
                 if let Some(JsonValue::String(t)) = type_val {
@@ -1062,7 +1082,8 @@ mod tests {
 
     #[test]
     fn object_with_required_marks_optional() {
-        let out = convert(r#"{
+        let out = convert(
+            r#"{
             "$defs": {
                 "User": {
                     "type": "object",
@@ -1074,9 +1095,13 @@ mod tests {
                     "required": ["id", "name"]
                 }
             }
-        }"#);
+        }"#,
+        );
         // email is not required → should be marked optional
-        assert!(out.contains("email: string?") || out.contains("optional: true"), "got: {out}");
+        assert!(
+            out.contains("email: string?") || out.contains("optional: true"),
+            "got: {out}"
+        );
         // id and name should not be optional
         assert!(out.contains("id: integer"), "got: {out}");
         assert!(out.contains("name: string"), "got: {out}");
@@ -1084,7 +1109,8 @@ mod tests {
 
     #[test]
     fn ref_resolution() {
-        let out = convert(r##"{
+        let out = convert(
+            r##"{
             "$defs": {
                 "Tag": {"type": "string"},
                 "Item": {
@@ -1095,13 +1121,15 @@ mod tests {
                     "required": ["tag"]
                 }
             }
-        }"##);
+        }"##,
+        );
         assert!(out.contains("tag: Tag"), "got: {out}");
     }
 
     #[test]
     fn any_of_union() {
-        let out = convert(r#"{
+        let out = convert(
+            r#"{
             "$defs": {
                 "Val": {
                     "anyOf": [
@@ -1110,7 +1138,8 @@ mod tests {
                     ]
                 }
             }
-        }"#);
+        }"#,
+        );
         assert!(out.contains("type: union"), "got: {out}");
     }
 
@@ -1126,15 +1155,15 @@ mod tests {
 
     #[test]
     fn description_becomes_comment() {
-        let out = convert(
-            r#"{"$defs":{"Port":{"type":"integer","description":"The TCP port number"}}}"#,
-        );
+        let out =
+            convert(r#"{"$defs":{"Port":{"type":"integer","description":"The TCP port number"}}}"#);
         assert!(out.contains("# The TCP port number"), "got: {out}");
     }
 
     #[test]
     fn array_schema_with_items() {
-        let out = convert(r#"{
+        let out = convert(
+            r#"{
             "$defs": {
                 "Tags": {
                     "type": "array",
@@ -1143,7 +1172,8 @@ mod tests {
                     "maxItems": 10
                 }
             }
-        }"#);
+        }"#,
+        );
         assert!(out.contains("type: array"), "got: {out}");
         assert!(out.contains("items: string"), "got: {out}");
         assert!(out.contains("minItems: 1"), "got: {out}");

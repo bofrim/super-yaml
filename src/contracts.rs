@@ -1,17 +1,20 @@
-//! Parsing and validation for the `---functional` section.
+//! Parsing and validation for the `---contracts` section.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value as JsonValue;
 
-use crate::ast::{ConditionSet, DataPermissions, FreezeMarkers, FunctionalDoc, FunctionDef, ParameterDef, PermissionsDef, SpecificationDef};
-use crate::error::SyamlError;
 use crate::ast::SchemaDoc;
+use crate::ast::{
+    ConditionSet, ContractsDoc, DataPermissions, FreezeMarkers, FunctionDef, ParameterDef,
+    PermissionsDef, SpecificationDef,
+};
+use crate::error::SyamlError;
 
-/// Parses a `---functional` section value into a [`FunctionalDoc`].
-pub fn parse_functional(value: &JsonValue) -> Result<FunctionalDoc, SyamlError> {
+/// Parses a `---contracts` section value into a [`ContractsDoc`].
+pub fn parse_contracts(value: &JsonValue) -> Result<ContractsDoc, SyamlError> {
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::FunctionalError("functional section must be a mapping/object".to_string())
+        SyamlError::ContractsError("contracts section must be a mapping/object".to_string())
     })?;
 
     let mut functions = BTreeMap::new();
@@ -20,27 +23,21 @@ pub fn parse_functional(value: &JsonValue) -> Result<FunctionalDoc, SyamlError> 
         functions.insert(name.clone(), func_def);
     }
 
-    Ok(FunctionalDoc { functions })
+    Ok(ContractsDoc { functions })
 }
 
 fn parse_function_def(name: &str, value: &JsonValue) -> Result<FunctionDef, SyamlError> {
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::FunctionalError(format!(
-            "functional.{} must be a mapping/object",
-            name
-        ))
+        SyamlError::ContractsError(format!("contracts.{} must be a mapping/object", name))
     })?;
 
     // inputs is required
     let inputs_raw = map.get("inputs").ok_or_else(|| {
-        SyamlError::FunctionalError(format!(
-            "functional.{} must define 'inputs'",
-            name
-        ))
+        SyamlError::ContractsError(format!("contracts.{} must define 'inputs'", name))
     })?;
     let inputs_map = inputs_raw.as_object().ok_or_else(|| {
-        SyamlError::FunctionalError(format!(
-            "functional.{}.inputs must be a mapping/object",
+        SyamlError::ContractsError(format!(
+            "contracts.{}.inputs must be a mapping/object",
             name
         ))
     })?;
@@ -90,8 +87,8 @@ fn parse_parameter_def(
 
     // Expanded form: {type: "TypeName", mutable: true}
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::FunctionalError(format!(
-            "functional.{}.inputs.{} must be a string or mapping",
+        SyamlError::ContractsError(format!(
+            "contracts.{}.inputs.{} must be a string or mapping",
             func_name, param_name
         ))
     })?;
@@ -99,8 +96,8 @@ fn parse_parameter_def(
     let type_ref = if let Some(t) = map.get("type") {
         serde_json::json!({ "type": t })
     } else {
-        return Err(SyamlError::FunctionalError(format!(
-            "functional.{}.inputs.{} must define 'type'",
+        return Err(SyamlError::ContractsError(format!(
+            "contracts.{}.inputs.{} must define 'type'",
             func_name, param_name
         )));
     };
@@ -115,8 +112,8 @@ fn parse_parameter_def(
 
 fn parse_permissions_def(func_name: &str, value: &JsonValue) -> Result<PermissionsDef, SyamlError> {
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::FunctionalError(format!(
-            "functional.{}.permissions must be a mapping/object",
+        SyamlError::ContractsError(format!(
+            "contracts.{}.permissions must be a mapping/object",
             func_name
         ))
     })?;
@@ -128,14 +125,20 @@ fn parse_permissions_def(func_name: &str, value: &JsonValue) -> Result<Permissio
 
     let data = if let Some(data_val) = map.get("data") {
         let data_map = data_val.as_object().ok_or_else(|| {
-            SyamlError::FunctionalError(format!(
-                "functional.{}.permissions.data must be a mapping/object",
+            SyamlError::ContractsError(format!(
+                "contracts.{}.permissions.data must be a mapping/object",
                 func_name
             ))
         })?;
 
-        let read = parse_string_list(data_map.get("read"), &format!("functional.{}.permissions.data.read", func_name))?;
-        let write = parse_string_list(data_map.get("write"), &format!("functional.{}.permissions.data.write", func_name))?;
+        let read = parse_string_list(
+            data_map.get("read"),
+            &format!("contracts.{}.permissions.data.read", func_name),
+        )?;
+        let write = parse_string_list(
+            data_map.get("write"),
+            &format!("contracts.{}.permissions.data.write", func_name),
+        )?;
 
         Some(DataPermissions { read, write })
     } else {
@@ -155,13 +158,13 @@ fn parse_string_list(value: Option<&JsonValue>, path: &str) -> Result<Vec<String
     let Some(val) = value else {
         return Ok(Vec::new());
     };
-    let arr = val.as_array().ok_or_else(|| {
-        SyamlError::FunctionalError(format!("{} must be an array", path))
-    })?;
+    let arr = val
+        .as_array()
+        .ok_or_else(|| SyamlError::ContractsError(format!("{} must be an array", path)))?;
     let mut out = Vec::new();
     for item in arr {
         let s = item.as_str().ok_or_else(|| {
-            SyamlError::FunctionalError(format!("{} entries must be strings", path))
+            SyamlError::ContractsError(format!("{} entries must be strings", path))
         })?;
         out.push(s.to_string());
     }
@@ -174,19 +177,19 @@ fn parse_condition_set(value: &JsonValue, path: &str) -> Result<ConditionSet, Sy
         let mut semantic = Vec::new();
         for item in arr {
             let s = item.as_str().ok_or_else(|| {
-                SyamlError::FunctionalError(format!("{} array entries must be strings", path))
+                SyamlError::ContractsError(format!("{} array entries must be strings", path))
             })?;
             semantic.push(s.to_string());
         }
-        return Ok(ConditionSet { semantic, strict: Vec::new() });
+        return Ok(ConditionSet {
+            semantic,
+            strict: Vec::new(),
+        });
     }
 
     // Object form: {semantic: [...], strict: [...]}
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::FunctionalError(format!(
-            "{} must be an array or mapping/object",
-            path
-        ))
+        SyamlError::ContractsError(format!("{} must be an array or mapping/object", path))
     })?;
 
     let semantic = parse_string_list(map.get("semantic"), &format!("{}.semantic", path))?;
@@ -195,10 +198,13 @@ fn parse_condition_set(value: &JsonValue, path: &str) -> Result<ConditionSet, Sy
     Ok(ConditionSet { semantic, strict })
 }
 
-fn parse_specification_def(func_name: &str, value: &JsonValue) -> Result<SpecificationDef, SyamlError> {
+fn parse_specification_def(
+    func_name: &str,
+    value: &JsonValue,
+) -> Result<SpecificationDef, SyamlError> {
     let map = value.as_object().ok_or_else(|| {
-        SyamlError::FunctionalError(format!(
-            "functional.{}.specification must be a mapping/object",
+        SyamlError::ContractsError(format!(
+            "contracts.{}.specification must be a mapping/object",
             func_name
         ))
     })?;
@@ -206,7 +212,7 @@ fn parse_specification_def(func_name: &str, value: &JsonValue) -> Result<Specifi
     let preconditions = if let Some(pre_val) = map.get("preconditions") {
         Some(parse_condition_set(
             pre_val,
-            &format!("functional.{}.specification.preconditions", func_name),
+            &format!("contracts.{}.specification.preconditions", func_name),
         )?)
     } else {
         None
@@ -215,7 +221,7 @@ fn parse_specification_def(func_name: &str, value: &JsonValue) -> Result<Specifi
     let postconditions = if let Some(post_val) = map.get("postconditions") {
         Some(parse_condition_set(
             post_val,
-            &format!("functional.{}.specification.postconditions", func_name),
+            &format!("contracts.{}.specification.postconditions", func_name),
         )?)
     } else {
         None
@@ -229,19 +235,21 @@ fn parse_specification_def(func_name: &str, value: &JsonValue) -> Result<Specifi
         }
     }
 
-    Ok(SpecificationDef { preconditions, postconditions, extra })
+    Ok(SpecificationDef {
+        preconditions,
+        postconditions,
+        extra,
+    })
 }
 
 /// Validates strict conditions in specification blocks: syntax check + scope check.
 ///
 /// For each function with a specification containing strict conditions:
-/// - Parses each expression (syntax error → FunctionalError)
+/// - Parses each expression (syntax error → ContractsError)
 /// - Walks the AST for variable references
 /// - Verifies roots are in-scope (input/data for preconditions; input/data/output for postconditions)
 /// - Verifies input params exist, data paths are covered by permissions.data.read, output is declared
-pub fn validate_specification_strict_conditions(
-    doc: &FunctionalDoc,
-) -> Result<(), SyamlError> {
+pub fn validate_specification_strict_conditions(doc: &ContractsDoc) -> Result<(), SyamlError> {
     use crate::expr::parse_expression;
     use crate::schema::collect_var_paths;
 
@@ -266,8 +274,8 @@ pub fn validate_specification_strict_conditions(
         if let Some(cond_set) = &spec.preconditions {
             for expr_str in &cond_set.strict {
                 let ast = parse_expression(expr_str).map_err(|e| {
-                    SyamlError::FunctionalError(format!(
-                        "functional.{}: invalid strict precondition expression '{}': {}",
+                    SyamlError::ContractsError(format!(
+                        "contracts.{}: invalid strict precondition expression '{}': {}",
                         func_name, expr_str, e
                     ))
                 })?;
@@ -276,18 +284,20 @@ pub fn validate_specification_strict_conditions(
                 collect_var_paths(&ast, &mut var_paths);
 
                 for var_path in &var_paths {
-                    let Some(root) = var_path.first() else { continue; };
+                    let Some(root) = var_path.first() else {
+                        continue;
+                    };
                     match root.as_str() {
                         "input" => {
                             let param = var_path.get(1).ok_or_else(|| {
-                                SyamlError::FunctionalError(format!(
-                                    "functional.{}: strict precondition '{}': 'input' must be followed by a parameter name (e.g. input.x)",
+                                SyamlError::ContractsError(format!(
+                                    "contracts.{}: strict precondition '{}': 'input' must be followed by a parameter name (e.g. input.x)",
                                     func_name, expr_str
                                 ))
                             })?;
                             if !input_params.contains(param) {
-                                return Err(SyamlError::FunctionalError(format!(
-                                    "functional.{}: strict precondition '{}': unknown input parameter '{}'",
+                                return Err(SyamlError::ContractsError(format!(
+                                    "contracts.{}: strict precondition '{}': unknown input parameter '{}'",
                                     func_name, expr_str, param
                                 )));
                             }
@@ -295,21 +305,21 @@ pub fn validate_specification_strict_conditions(
                         "data" => {
                             let data_segs = &var_path[1..];
                             if !read_path_covers_segments(&read_paths, data_segs) {
-                                return Err(SyamlError::FunctionalError(format!(
-                                    "functional.{}: strict precondition '{}': data path '{}' is not covered by permissions.data.read",
+                                return Err(SyamlError::ContractsError(format!(
+                                    "contracts.{}: strict precondition '{}': data path '{}' is not covered by permissions.data.read",
                                     func_name, expr_str, var_path.join(".")
                                 )));
                             }
                         }
                         "output" => {
-                            return Err(SyamlError::FunctionalError(format!(
-                                "functional.{}: strict precondition '{}': 'output' is not allowed in preconditions",
+                            return Err(SyamlError::ContractsError(format!(
+                                "contracts.{}: strict precondition '{}': 'output' is not allowed in preconditions",
                                 func_name, expr_str
                             )));
                         }
                         other => {
-                            return Err(SyamlError::FunctionalError(format!(
-                                "functional.{}: strict precondition '{}': unknown variable root '{}'; allowed roots are 'input' and 'data'",
+                            return Err(SyamlError::ContractsError(format!(
+                                "contracts.{}: strict precondition '{}': unknown variable root '{}'; allowed roots are 'input' and 'data'",
                                 func_name, expr_str, other
                             )));
                         }
@@ -322,8 +332,8 @@ pub fn validate_specification_strict_conditions(
         if let Some(cond_set) = &spec.postconditions {
             for expr_str in &cond_set.strict {
                 let ast = parse_expression(expr_str).map_err(|e| {
-                    SyamlError::FunctionalError(format!(
-                        "functional.{}: invalid strict postcondition expression '{}': {}",
+                    SyamlError::ContractsError(format!(
+                        "contracts.{}: invalid strict postcondition expression '{}': {}",
                         func_name, expr_str, e
                     ))
                 })?;
@@ -332,18 +342,20 @@ pub fn validate_specification_strict_conditions(
                 collect_var_paths(&ast, &mut var_paths);
 
                 for var_path in &var_paths {
-                    let Some(root) = var_path.first() else { continue; };
+                    let Some(root) = var_path.first() else {
+                        continue;
+                    };
                     match root.as_str() {
                         "input" => {
                             let param = var_path.get(1).ok_or_else(|| {
-                                SyamlError::FunctionalError(format!(
-                                    "functional.{}: strict postcondition '{}': 'input' must be followed by a parameter name (e.g. input.x)",
+                                SyamlError::ContractsError(format!(
+                                    "contracts.{}: strict postcondition '{}': 'input' must be followed by a parameter name (e.g. input.x)",
                                     func_name, expr_str
                                 ))
                             })?;
                             if !input_params.contains(param) {
-                                return Err(SyamlError::FunctionalError(format!(
-                                    "functional.{}: strict postcondition '{}': unknown input parameter '{}'",
+                                return Err(SyamlError::ContractsError(format!(
+                                    "contracts.{}: strict postcondition '{}': unknown input parameter '{}'",
                                     func_name, expr_str, param
                                 )));
                             }
@@ -351,24 +363,24 @@ pub fn validate_specification_strict_conditions(
                         "data" => {
                             let data_segs = &var_path[1..];
                             if !read_path_covers_segments(&read_paths, data_segs) {
-                                return Err(SyamlError::FunctionalError(format!(
-                                    "functional.{}: strict postcondition '{}': data path '{}' is not covered by permissions.data.read",
+                                return Err(SyamlError::ContractsError(format!(
+                                    "contracts.{}: strict postcondition '{}': data path '{}' is not covered by permissions.data.read",
                                     func_name, expr_str, var_path.join(".")
                                 )));
                             }
                         }
                         "output" => {
                             if !has_output {
-                                return Err(SyamlError::FunctionalError(format!(
-                                    "functional.{}: strict postcondition '{}': 'output' referenced but function declares no output type",
+                                return Err(SyamlError::ContractsError(format!(
+                                    "contracts.{}: strict postcondition '{}': 'output' referenced but function declares no output type",
                                     func_name, expr_str
                                 )));
                             }
                             // output.X path: valid when output is declared (no deeper schema check needed)
                         }
                         other => {
-                            return Err(SyamlError::FunctionalError(format!(
-                                "functional.{}: strict postcondition '{}': unknown variable root '{}'; allowed roots are 'input', 'data', and 'output'",
+                            return Err(SyamlError::ContractsError(format!(
+                                "contracts.{}: strict postcondition '{}': unknown variable root '{}'; allowed roots are 'input', 'data', and 'output'",
                                 func_name, expr_str, other
                             )));
                         }
@@ -399,9 +411,9 @@ fn read_path_covers_segments(read_paths: &[String], data_segs: &[String]) -> boo
     false
 }
 
-/// Validates that all type references in functional definitions exist in the type registry.
-pub fn validate_functional_type_references(
-    doc: &FunctionalDoc,
+/// Validates that all type references in contracts definitions exist in the type registry.
+pub fn validate_contracts_type_references(
+    doc: &ContractsDoc,
     types: &BTreeMap<String, JsonValue>,
 ) -> Result<(), SyamlError> {
     for (func_name, func_def) in &doc.functions {
@@ -409,8 +421,8 @@ pub fn validate_functional_type_references(
             let type_ref = &param_def.type_ref;
             if let Some(type_name) = type_ref.get("type").and_then(JsonValue::as_str) {
                 if !is_builtin_type(type_name) && !types.contains_key(type_name) {
-                    return Err(SyamlError::FunctionalError(format!(
-                        "functional.{}.inputs.{}: unknown type '{}'",
+                    return Err(SyamlError::ContractsError(format!(
+                        "contracts.{}.inputs.{}: unknown type '{}'",
                         func_name, param_name, type_name
                     )));
                 }
@@ -420,8 +432,8 @@ pub fn validate_functional_type_references(
         if let Some(output) = &func_def.output {
             if let Some(type_name) = output.get("type").and_then(JsonValue::as_str) {
                 if !is_builtin_type(type_name) && !types.contains_key(type_name) {
-                    return Err(SyamlError::FunctionalError(format!(
-                        "functional.{}.output: unknown type '{}'",
+                    return Err(SyamlError::ContractsError(format!(
+                        "contracts.{}.output: unknown type '{}'",
                         func_name, type_name
                     )));
                 }
@@ -431,8 +443,8 @@ pub fn validate_functional_type_references(
         if let Some(errors) = &func_def.errors {
             if let Some(type_name) = errors.get("type").and_then(JsonValue::as_str) {
                 if !is_builtin_type(type_name) && !types.contains_key(type_name) {
-                    return Err(SyamlError::FunctionalError(format!(
-                        "functional.{}.errors: unknown type '{}'",
+                    return Err(SyamlError::ContractsError(format!(
+                        "contracts.{}.errors: unknown type '{}'",
                         func_name, type_name
                     )));
                 }
@@ -451,7 +463,7 @@ fn is_builtin_type(name: &str) -> bool {
 
 /// Validates permission data paths against the actual data structure.
 pub fn validate_permission_data_paths(
-    doc: &FunctionalDoc,
+    doc: &ContractsDoc,
     data: &JsonValue,
     import_aliases: &BTreeSet<String>,
 ) -> Result<(), SyamlError> {
@@ -463,7 +475,12 @@ pub fn validate_permission_data_paths(
             continue;
         };
 
-        let all_paths: Vec<&str> = data_perms.read.iter().chain(data_perms.write.iter()).map(|s| s.as_str()).collect();
+        let all_paths: Vec<&str> = data_perms
+            .read
+            .iter()
+            .chain(data_perms.write.iter())
+            .map(|s| s.as_str())
+            .collect();
 
         for path in all_paths {
             // Reject paths rooted at import aliases
@@ -471,8 +488,8 @@ pub fn validate_permission_data_paths(
             let root_stripped = root_segment.trim_start_matches('$').trim_start_matches('.');
             let first_key = root_stripped.split('.').next().unwrap_or(root_stripped);
             if import_aliases.contains(first_key) {
-                return Err(SyamlError::FunctionalError(format!(
-                    "functional.{}: permission path '{}' rooted at import alias '{}' is not allowed",
+                return Err(SyamlError::ContractsError(format!(
+                    "contracts.{}: permission path '{}' rooted at import alias '{}' is not allowed",
                     func_name, path, first_key
                 )));
             }
@@ -484,8 +501,8 @@ pub fn validate_permission_data_paths(
 
             let normalized = normalize_path(path);
             if !path_exists_in_data(&normalized, data) {
-                return Err(SyamlError::FunctionalError(format!(
-                    "functional.{}: permission path '{}' does not exist in data",
+                return Err(SyamlError::ContractsError(format!(
+                    "contracts.{}: permission path '{}' does not exist in data",
                     func_name, path
                 )));
             }
@@ -522,7 +539,7 @@ fn path_exists_in_data(segments: &[String], data: &JsonValue) -> bool {
 
 /// Validates that write paths don't target schema-frozen fields.
 pub fn validate_permission_mutability_alignment(
-    doc: &FunctionalDoc,
+    doc: &ContractsDoc,
     schema: &SchemaDoc,
     type_hints: &BTreeMap<String, String>,
 ) -> Result<(), SyamlError> {
@@ -546,8 +563,8 @@ pub fn validate_permission_mutability_alignment(
 
             let mode = resolve_mutability_for_path(&normalized, type_hints, schema)?;
             if mode == MutabilityMode::Frozen {
-                return Err(SyamlError::FunctionalError(format!(
-                    "functional.{}: write permission on '{}' conflicts with schema mutability 'frozen'",
+                return Err(SyamlError::ContractsError(format!(
+                    "contracts.{}: write permission on '{}' conflicts with schema mutability 'frozen'",
                     func_name, write_path
                 )));
             }
@@ -558,7 +575,7 @@ pub fn validate_permission_mutability_alignment(
 
 /// Validates that write paths don't target instance-frozen keys.
 pub fn validate_permission_instance_lock_conflicts(
-    doc: &FunctionalDoc,
+    doc: &ContractsDoc,
     freeze_markers: &FreezeMarkers,
 ) -> Result<(), SyamlError> {
     for (func_name, func_def) in &doc.functions {
@@ -578,8 +595,8 @@ pub fn validate_permission_instance_lock_conflicts(
 
             // Check if this exact path or any ancestor path is frozen
             if is_path_frozen(&normalized, freeze_markers) {
-                return Err(SyamlError::FunctionalError(format!(
-                    "functional.{}: write permission on '{}' conflicts with instance-level freeze marker",
+                return Err(SyamlError::ContractsError(format!(
+                    "contracts.{}: write permission on '{}' conflicts with instance-level freeze marker",
                     func_name, write_path
                 )));
             }
@@ -606,14 +623,12 @@ fn is_path_frozen(path: &str, freeze_markers: &FreezeMarkers) -> bool {
     false
 }
 
-/// Serializes a `FunctionalDoc` to JSON text.
-pub fn functional_to_json(doc: &FunctionalDoc, pretty: bool) -> Result<String, SyamlError> {
+/// Serializes a `ContractsDoc` to JSON text.
+pub fn contracts_to_json(doc: &ContractsDoc, pretty: bool) -> Result<String, SyamlError> {
     if pretty {
-        serde_json::to_string_pretty(doc)
-            .map_err(|e| SyamlError::SerializationError(e.to_string()))
+        serde_json::to_string_pretty(doc).map_err(|e| SyamlError::SerializationError(e.to_string()))
     } else {
-        serde_json::to_string(doc)
-            .map_err(|e| SyamlError::SerializationError(e.to_string()))
+        serde_json::to_string(doc).map_err(|e| SyamlError::SerializationError(e.to_string()))
     }
 }
 
@@ -697,7 +712,10 @@ fn translate_condition_expr(
 /// Resolves a type_ref to its primitive base kind: "integer", "number", "string",
 /// "boolean", "array", "object", or "unknown".  Follows named-type references one
 /// level into the schema registry.
-fn resolve_base_kind<'a>(type_ref: &'a JsonValue, types: &'a BTreeMap<String, JsonValue>) -> &'a str {
+fn resolve_base_kind<'a>(
+    type_ref: &'a JsonValue,
+    types: &'a BTreeMap<String, JsonValue>,
+) -> &'a str {
     if let Some(t) = type_ref.get("type").and_then(|v| v.as_str()) {
         match t {
             "integer" | "number" | "string" | "boolean" | "array" | "object" | "null" => t,
@@ -771,7 +789,12 @@ fn needs_generated_type(type_ref: &JsonValue) -> bool {
             // Arrays with complex item schemas need a generated type
             type_ref
                 .get("items")
-                .map(|items| !matches!(items.get("type").and_then(|v| v.as_str()), Some("integer" | "number" | "string" | "boolean" | "null")))
+                .map(|items| {
+                    !matches!(
+                        items.get("type").and_then(|v| v.as_str()),
+                        Some("integer" | "number" | "string" | "boolean" | "null")
+                    )
+                })
                 .unwrap_or(false)
         }
         "object" => type_ref.get("properties").is_some(),
@@ -782,7 +805,7 @@ fn needs_generated_type(type_ref: &JsonValue) -> bool {
 /// Collects any parameters that require a generated named type, returning
 /// (type_name, Rust_struct_code) pairs.  Emitted before the function stubs.
 fn collect_generated_types_rust(
-    doc: &FunctionalDoc,
+    doc: &ContractsDoc,
     types: &BTreeMap<String, JsonValue>,
 ) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -820,7 +843,11 @@ fn generate_rust_struct(
     if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
         for (field_name, field_schema) in props {
             let rust_type = schema_to_rust_type(field_schema, types);
-            out.push_str(&format!("    pub {}: {},\n", to_snake_case(field_name), rust_type));
+            out.push_str(&format!(
+                "    pub {}: {},\n",
+                to_snake_case(field_name),
+                rust_type
+            ));
         }
     }
     out.push_str("}\n");
@@ -829,7 +856,7 @@ fn generate_rust_struct(
 
 /// Same as above but for TypeScript interfaces.
 fn collect_generated_types_ts(
-    doc: &FunctionalDoc,
+    doc: &ContractsDoc,
     types: &BTreeMap<String, JsonValue>,
 ) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -879,10 +906,7 @@ fn generate_ts_interface(
 
 /// Returns the Rust type name to use for a parameter in the generated check
 /// functions — respects named type aliases instead of resolving to primitives.
-fn rust_check_param_type(
-    param_def: &ParameterDef,
-    types: &BTreeMap<String, JsonValue>,
-) -> String {
+fn rust_check_param_type(param_def: &ParameterDef, types: &BTreeMap<String, JsonValue>) -> String {
     if needs_generated_type(&param_def.type_ref) {
         // Inline schema — the generated type name is handled by the caller; fall back
         schema_to_rust_type(&param_def.type_ref, types)
@@ -939,7 +963,11 @@ fn build_preconditions_fn_rust(
         .iter()
         .filter(|(name, _)| all_input_refs.contains(*name))
         .map(|(name, def)| {
-            format!("{}: {}", to_snake_case(name), rust_check_param_type(def, types))
+            format!(
+                "{}: {}",
+                to_snake_case(name),
+                rust_check_param_type(def, types)
+            )
         })
         .collect();
     if needs_data {
@@ -1012,7 +1040,11 @@ fn build_postconditions_fn_rust(
         .iter()
         .filter(|(name, _)| all_input_refs.contains(*name))
         .map(|(name, def)| {
-            format!("{}: {}", to_snake_case(name), rust_check_param_type(def, types))
+            format!(
+                "{}: {}",
+                to_snake_case(name),
+                rust_check_param_type(def, types)
+            )
         })
         .collect();
     if uses_output {
@@ -1066,10 +1098,7 @@ fn build_postconditions_fn_rust(
 // TypeScript condition function builders
 // ---------------------------------------------------------------------------
 
-fn ts_check_param_type(
-    param_def: &ParameterDef,
-    types: &BTreeMap<String, JsonValue>,
-) -> String {
+fn ts_check_param_type(param_def: &ParameterDef, types: &BTreeMap<String, JsonValue>) -> String {
     schema_to_ts_type(&param_def.type_ref, types)
 }
 
@@ -1108,7 +1137,11 @@ fn build_preconditions_fn_ts(
         .iter()
         .filter(|(name, _)| all_input_refs.contains(*name))
         .map(|(name, def)| {
-            format!("{}: {}", to_camel_case(name), ts_check_param_type(def, types))
+            format!(
+                "{}: {}",
+                to_camel_case(name),
+                ts_check_param_type(def, types)
+            )
         })
         .collect();
 
@@ -1178,7 +1211,11 @@ fn build_postconditions_fn_ts(
         .iter()
         .filter(|(name, _)| all_input_refs.contains(*name))
         .map(|(name, def)| {
-            format!("{}: {}", to_camel_case(name), ts_check_param_type(def, types))
+            format!(
+                "{}: {}",
+                to_camel_case(name),
+                ts_check_param_type(def, types)
+            )
         })
         .collect();
     if uses_output {
@@ -1230,7 +1267,7 @@ fn build_postconditions_fn_ts(
 // Stub generators
 // ---------------------------------------------------------------------------
 
-/// Generates Rust function stubs from a functional document.
+/// Generates Rust function stubs from a contracts document.
 ///
 /// For functions with strict pre/postconditions the output is split into four
 /// pieces: a typed `_check_preconditions` function, a typed
@@ -1243,7 +1280,7 @@ fn build_postconditions_fn_ts(
 ///
 /// Functions without strict conditions emit a single simple stub.
 pub fn generate_rust_function_stubs(
-    doc: &FunctionalDoc,
+    doc: &ContractsDoc,
     types: &BTreeMap<String, JsonValue>,
 ) -> String {
     if doc.functions.is_empty() {
@@ -1251,7 +1288,7 @@ pub fn generate_rust_function_stubs(
     }
 
     let mut out = String::new();
-    out.push_str("// --- Functional stubs ---\n\n");
+    out.push_str("// --- Contracts stubs ---\n\n");
 
     // Emit any generated types for inline parameter schemas
     for (_, code) in collect_generated_types_rust(doc, types) {
@@ -1346,10 +1383,13 @@ pub fn generate_rust_function_stubs(
                 .as_ref()
                 .and_then(|s| s.preconditions.as_ref())
                 .map(|cs| {
-                    cs.strict.iter().flat_map(|e| {
-                        let (inp, _, _) = collect_condition_refs(e);
-                        inp
-                    }).collect()
+                    cs.strict
+                        .iter()
+                        .flat_map(|e| {
+                            let (inp, _, _) = collect_condition_refs(e);
+                            inp
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
             let pre_needs_data = func_def
@@ -1370,20 +1410,25 @@ pub fn generate_rust_function_stubs(
                 .as_ref()
                 .and_then(|s| s.postconditions.as_ref())
                 .map(|cs| {
-                    cs.strict.iter().flat_map(|e| {
-                        let (inp, _, _) = collect_condition_refs(e);
-                        inp
-                    }).collect()
+                    cs.strict
+                        .iter()
+                        .flat_map(|e| {
+                            let (inp, _, _) = collect_condition_refs(e);
+                            inp
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
             let post_uses_output = func_def
                 .specification
                 .as_ref()
                 .and_then(|s| s.postconditions.as_ref())
-                .map(|cs| cs.strict.iter().any(|e| {
-                    let (_, _, out) = collect_condition_refs(e);
-                    out
-                }))
+                .map(|cs| {
+                    cs.strict.iter().any(|e| {
+                        let (_, _, out) = collect_condition_refs(e);
+                        out
+                    })
+                })
                 .unwrap_or(false);
             let post_needs_data = func_def
                 .specification
@@ -1403,8 +1448,7 @@ pub fn generate_rust_function_stubs(
                 pub_params.push("data: &serde_json::Value".to_string());
             }
 
-            let pub_return =
-                format!("Result<{}, Box<dyn std::error::Error>>", base_return_type);
+            let pub_return = format!("Result<{}, Box<dyn std::error::Error>>", base_return_type);
 
             let mut body = String::new();
 
@@ -1436,8 +1480,7 @@ pub fn generate_rust_function_stubs(
                 ));
             }
 
-            let impl_args: Vec<String> =
-                func_def.inputs.keys().map(|p| to_snake_case(p)).collect();
+            let impl_args: Vec<String> = func_def.inputs.keys().map(|p| to_snake_case(p)).collect();
             let impl_call = format!("{snake_name}_impl({})", impl_args.join(", "));
             if func_def.errors.is_some() {
                 body.push_str(&format!("    let _result = {impl_call}?;\n"));
@@ -1515,7 +1558,7 @@ pub fn generate_rust_function_stubs(
     out
 }
 
-/// Generates TypeScript function stubs from a functional document.
+/// Generates TypeScript function stubs from a contracts document.
 ///
 /// For functions with strict pre/postconditions the output is split into four
 /// pieces: a typed `CheckPreconditions` function, a typed
@@ -1527,7 +1570,7 @@ pub fn generate_rust_function_stubs(
 ///
 /// Functions without strict conditions emit a single simple stub.
 pub fn generate_typescript_function_stubs(
-    doc: &FunctionalDoc,
+    doc: &ContractsDoc,
     types: &BTreeMap<String, JsonValue>,
 ) -> String {
     if doc.functions.is_empty() {
@@ -1535,7 +1578,7 @@ pub fn generate_typescript_function_stubs(
     }
 
     let mut out = String::new();
-    out.push_str("// --- Functional stubs ---\n\n");
+    out.push_str("// --- Contracts stubs ---\n\n");
 
     // Emit any generated types for inline parameter schemas
     for (_, code) in collect_generated_types_ts(doc, types) {
@@ -1668,17 +1711,25 @@ pub fn generate_typescript_function_stubs(
                 .as_ref()
                 .and_then(|s| s.preconditions.as_ref())
                 .map(|cs| {
-                    cs.strict.iter().flat_map(|e| {
-                        let (inp, _, _) = collect_condition_refs(e);
-                        inp
-                    }).collect()
+                    cs.strict
+                        .iter()
+                        .flat_map(|e| {
+                            let (inp, _, _) = collect_condition_refs(e);
+                            inp
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
             let pre_needs_data_val = func_def
                 .specification
                 .as_ref()
                 .and_then(|s| s.preconditions.as_ref())
-                .map(|cs| cs.strict.iter().any(|e| { let (_, dat, _) = collect_condition_refs(e); !dat.is_empty() }))
+                .map(|cs| {
+                    cs.strict.iter().any(|e| {
+                        let (_, dat, _) = collect_condition_refs(e);
+                        !dat.is_empty()
+                    })
+                })
                 .unwrap_or(false);
 
             let post_input_refs: BTreeSet<String> = func_def
@@ -1686,23 +1737,36 @@ pub fn generate_typescript_function_stubs(
                 .as_ref()
                 .and_then(|s| s.postconditions.as_ref())
                 .map(|cs| {
-                    cs.strict.iter().flat_map(|e| {
-                        let (inp, _, _) = collect_condition_refs(e);
-                        inp
-                    }).collect()
+                    cs.strict
+                        .iter()
+                        .flat_map(|e| {
+                            let (inp, _, _) = collect_condition_refs(e);
+                            inp
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
             let post_uses_output = func_def
                 .specification
                 .as_ref()
                 .and_then(|s| s.postconditions.as_ref())
-                .map(|cs| cs.strict.iter().any(|e| { let (_, _, out) = collect_condition_refs(e); out }))
+                .map(|cs| {
+                    cs.strict.iter().any(|e| {
+                        let (_, _, out) = collect_condition_refs(e);
+                        out
+                    })
+                })
                 .unwrap_or(false);
             let post_needs_data_val = func_def
                 .specification
                 .as_ref()
                 .and_then(|s| s.postconditions.as_ref())
-                .map(|cs| cs.strict.iter().any(|e| { let (_, dat, _) = collect_condition_refs(e); !dat.is_empty() }))
+                .map(|cs| {
+                    cs.strict.iter().any(|e| {
+                        let (_, dat, _) = collect_condition_refs(e);
+                        !dat.is_empty()
+                    })
+                })
                 .unwrap_or(false);
 
             let mut pub_params = typed_params.clone();
@@ -1742,8 +1806,7 @@ pub fn generate_typescript_function_stubs(
                 ));
             }
 
-            let impl_args: Vec<String> =
-                func_def.inputs.keys().map(|p| to_camel_case(p)).collect();
+            let impl_args: Vec<String> = func_def.inputs.keys().map(|p| to_camel_case(p)).collect();
             let impl_call = format!("{camel_name}Impl({})", impl_args.join(", "));
             if base_return_type == "void" {
                 body.push_str(&format!("  {impl_call};\n"));
@@ -1819,7 +1882,6 @@ pub fn generate_typescript_function_stubs(
 
     out
 }
-
 
 fn schema_to_rust_type(schema: &JsonValue, _types: &BTreeMap<String, JsonValue>) -> String {
     if let Some(type_name) = schema.get("type").and_then(JsonValue::as_str) {

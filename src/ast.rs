@@ -18,9 +18,9 @@ pub struct ParsedDocument {
     pub schema: SchemaDoc,
     /// Parsed data section plus extracted type hints.
     pub data: DataDoc,
-    /// Optional parsed functional section.
+    /// Optional parsed contracts section.
     #[serde(default)]
-    pub functional: Option<FunctionalDoc>,
+    pub contracts: Option<ContractsDoc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +93,7 @@ pub struct ImportBinding {
     #[serde(default)]
     pub version: Option<String>,
     /// Sections to import from the document. `None` (or omitted) means all sections.
-    /// Valid names: `"schema"`, `"data"`, `"functional"`.
+    /// Valid names: `"schema"`, `"data"`, `"contracts"`.
     /// Example: `sections: [schema]` imports only schema types; data is not available.
     #[serde(default)]
     pub sections: Option<Vec<String>>,
@@ -147,7 +147,7 @@ pub enum MutabilityMode {
 /// Map from normalized JSON path (`$.a.b`) to `true` when that key is frozen.
 pub type FreezeMarkers = BTreeMap<String, bool>;
 
-/// Single parameter definition in a functional function.
+/// Single parameter definition in a contracts function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterDef {
     /// Type reference as a JSON schema fragment.
@@ -203,7 +203,7 @@ pub struct SpecificationDef {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Single function definition in the `---functional` section.
+/// Single function definition in the `---contracts` section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionDef {
     /// Named input parameters.
@@ -222,9 +222,9 @@ pub struct FunctionDef {
     pub specification: Option<SpecificationDef>,
 }
 
-/// Parsed `---functional` section.
+/// Parsed `---contracts` section.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct FunctionalDoc {
+pub struct ContractsDoc {
     pub functions: BTreeMap<String, FunctionDef>,
 }
 

@@ -24,7 +24,7 @@ score <Score>: 0
 high_score^: 9999
 level <LevelLabel>: "Beginner"
 
----functional
+---contracts
 # AddPoints is allowed to read and increment the live score,
 # but may not touch the instance-frozen high_score key.
 AddPoints:

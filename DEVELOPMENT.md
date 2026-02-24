@@ -26,11 +26,11 @@ Compilation flow (high-level):
 6. Resolve env and expressions: `src/resolve.rs`, `src/expr/*`
 7. Coerce constructors: `src/coerce.rs`
 8. Validate type hints/constraints/versioning: `src/validate.rs`, `src/schema.rs`
-9. Functional section checks: `src/functional.rs`
+9. Contracts section checks: `src/contracts.rs`
 
 ## Module Responsibilities (`src/`)
 
-- `ast.rs`: shared data model (`ParsedDocument`, `CompiledDocument`, `Meta`, module/functional structs).
+- `ast.rs`: shared data model (`ParsedDocument`, `CompiledDocument`, `Meta`, module/contracts structs).
 - `error.rs`: top-level error enum (`SyamlError`) used throughout.
 - `section_scanner.rs`: marker and section fence validation.
 - `mini_yaml.rs`: constrained YAML parser.
@@ -44,7 +44,7 @@ Compilation flow (high-level):
 - `fetch.rs`: URL import fetch/cache/lockfile behavior.
 - `verify.rs`: hash/signature/version checks for imports.
 - `module.rs`: `module.syaml` parsing, module registry lookup, import policy enforcement.
-- `functional.rs`: `---functional` parsing, validation, JSON/stub generation.
+- `contracts.rs`: `---contracts` parsing, validation, JSON/stub generation.
 - `rust_codegen.rs`, `typescript_codegen.rs`, `proto_codegen.rs`: schema-to-code generation.
 - `json_schema_export.rs`, `json_schema_import.rs`: JSON Schema conversion bridge.
 - `html_docs_gen.rs`: HTML docs generation and import-graph site generation.
@@ -67,7 +67,7 @@ Use this as a first-pass “where do I edit?” index.
 | Import resolution/fetch/caching | `src/lib.rs` (import merge), `src/fetch.rs` | `tests/imports_integration.rs`, `scripts/check-examples.sh` fixtures |
 | Import integrity/policy/security | `src/verify.rs`, `src/module.rs`, `src/lib.rs` | `tests/imports_integration.rs`, `tests/module_integration.rs` |
 | Module manifest / registry behavior | `src/module.rs`, `src/lib.rs` (module context application) | `tests/module_integration.rs`, `library/*/module.syaml` if examples depend on it |
-| Functional section semantics | `src/functional.rs`, `src/lib.rs`, `src/ast.rs` | CLI output modes (`--functional-json`) and tests |
+| Contracts section semantics | `src/contracts.rs`, `src/lib.rs`, `src/ast.rs` | CLI output modes (`--contracts-json`) and tests |
 | Rust code generation | `src/rust_codegen.rs` | `tests/rust_codegen_integration.rs`, CLI flags/docs |
 | TypeScript code generation | `src/typescript_codegen.rs` | `tests/typescript_codegen_integration.rs`, CLI flags/docs |
 | Proto code generation | `src/proto_codegen.rs`, `src/schema.rs` (`field_number` semantics) | `tests/proto_codegen_integration.rs`, CLI flags/docs |

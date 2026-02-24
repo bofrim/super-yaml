@@ -1,12 +1,16 @@
-use std::{collections::{BTreeMap, BTreeSet, HashSet}, env, path::{Path, PathBuf}, process::ExitCode};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    env,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use super_yaml::{
-    collect_import_graph, discover_module_members, generate_html_docs_site,
-    compile_document_from_path_with_fetch, from_json_schema_path,
-    generate_html_docs_from_path, generate_proto_types_from_path,
-    generate_rust_types_and_data_from_path, generate_rust_types_from_path,
-    generate_typescript_types_and_data_from_path, generate_typescript_types_from_path,
-    EnvProvider, ProcessEnvProvider,
+    collect_import_graph, compile_document_from_path_with_fetch, discover_module_members,
+    from_json_schema_path, generate_html_docs_from_path, generate_html_docs_site,
+    generate_proto_types_from_path, generate_rust_types_and_data_from_path,
+    generate_rust_types_from_path, generate_typescript_types_and_data_from_path,
+    generate_typescript_types_from_path, EnvProvider, ProcessEnvProvider,
 };
 use super_yaml::{parse_document, to_json_schema};
 
@@ -18,7 +22,7 @@ enum OutputFormat {
     Rust,
     TypeScript,
     Proto,
-    FunctionalJson,
+    ContractsJson,
     HtmlDocs,
 }
 
@@ -175,14 +179,12 @@ fn run_compile(
             }
         }
         OutputFormat::Proto => generate_proto_types_from_path(file),
-        OutputFormat::FunctionalJson => {
+        OutputFormat::ContractsJson => {
             let input = std::fs::read_to_string(file)
                 .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
             let parsed = parse_document(&input).map_err(|e| e.to_string())?;
-            match parsed.functional {
-                Some(ref func_doc) => {
-                    super_yaml::functional::functional_to_json(func_doc, pretty)
-                }
+            match parsed.contracts {
+                Some(ref func_doc) => super_yaml::contracts::contracts_to_json(func_doc, pretty),
                 None => Ok("{}".to_string()),
             }
         }
@@ -205,14 +207,15 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
 
     let base_dir: PathBuf;
 
-    let file_name = input_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let file_name = input_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
 
     if file_name == "module.syaml" {
         // It's a module manifest: discover all member .syaml files
-        base_dir = std::fs::canonicalize(
-            input_path.parent().unwrap_or(Path::new(".")),
-        )
-        .unwrap_or_else(|_| input_path.parent().unwrap_or(Path::new(".")).to_path_buf());
+        base_dir = std::fs::canonicalize(input_path.parent().unwrap_or(Path::new(".")))
+            .unwrap_or_else(|_| input_path.parent().unwrap_or(Path::new(".")).to_path_buf());
 
         let members = discover_module_members(input_path).map_err(|e| e.to_string())?;
         for member in members {
@@ -228,8 +231,7 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
             roots.insert(canonical_member);
         }
     } else if input_path.is_dir() {
-        base_dir = std::fs::canonicalize(input_path)
-            .unwrap_or_else(|_| input_path.to_path_buf());
+        base_dir = std::fs::canonicalize(input_path).unwrap_or_else(|_| input_path.to_path_buf());
 
         // Walk the directory tree recursively, collecting all .syaml files.
         let mut dir_queue: Vec<PathBuf> = vec![input_path.to_path_buf()];
@@ -245,7 +247,8 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
                     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                         if ext == "syaml" {
                             if options.follow_imports {
-                                let graph = collect_import_graph(&path).map_err(|e| e.to_string())?;
+                                let graph =
+                                    collect_import_graph(&path).map_err(|e| e.to_string())?;
                                 for p in graph.into_keys() {
                                     roots.insert(p);
                                 }
@@ -259,10 +262,8 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
         }
     } else {
         // Regular .syaml file
-        base_dir = std::fs::canonicalize(
-            input_path.parent().unwrap_or(Path::new(".")),
-        )
-        .unwrap_or_else(|_| input_path.parent().unwrap_or(Path::new(".")).to_path_buf());
+        base_dir = std::fs::canonicalize(input_path.parent().unwrap_or(Path::new(".")))
+            .unwrap_or_else(|_| input_path.parent().unwrap_or(Path::new(".")).to_path_buf());
 
         if options.follow_imports {
             let graph = collect_import_graph(input_path).map_err(|e| e.to_string())?;
@@ -270,8 +271,8 @@ fn run_docs(input_path: &PathBuf, options: &DocsOptions) -> Result<(), String> {
                 roots.insert(path);
             }
         }
-        let canonical_input = std::fs::canonicalize(input_path)
-            .unwrap_or_else(|_| input_path.clone());
+        let canonical_input =
+            std::fs::canonicalize(input_path).unwrap_or_else(|_| input_path.clone());
         roots.insert(canonical_input);
     }
 
@@ -348,8 +349,8 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                 format = OutputFormat::JsonSchema;
                 i += 1;
             }
-            "--functional-json" => {
-                format = OutputFormat::FunctionalJson;
+            "--contracts-json" => {
+                format = OutputFormat::ContractsJson;
                 i += 1;
             }
             "--html" => {
@@ -359,7 +360,7 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
             "--format" => {
                 if i + 1 >= args.len() {
                     return Err(
-                        "missing value for --format (expected json, json-schema, yaml, rust, ts, typescript, proto, or html)"
+                        "missing value for --format (expected json, json-schema, yaml, rust, ts, typescript, proto, contracts-json, or html)"
                             .to_string(),
                     );
                 }
@@ -370,11 +371,11 @@ fn parse_compile_options(args: &[String]) -> Result<CompileOptions, String> {
                     "rust" => OutputFormat::Rust,
                     "ts" | "typescript" => OutputFormat::TypeScript,
                     "proto" => OutputFormat::Proto,
-                    "functional-json" => OutputFormat::FunctionalJson,
+                    "contracts-json" => OutputFormat::ContractsJson,
                     "html" => OutputFormat::HtmlDocs,
                     other => {
                         return Err(format!(
-                            "invalid --format value '{other}' (expected json, json-schema, yaml, rust, ts, typescript, proto, or html)"
+                            "invalid --format value '{other}' (expected json, json-schema, yaml, rust, ts, typescript, proto, contracts-json, or html)"
                         ))
                     }
                 };
@@ -434,7 +435,8 @@ fn parse_docs_options(args: &[String]) -> Result<DocsOptions, String> {
         }
     }
 
-    let output_dir = output_dir.ok_or_else(|| "--output <dir> is required for docs command".to_string())?;
+    let output_dir =
+        output_dir.ok_or_else(|| "--output <dir> is required for docs command".to_string())?;
 
     Ok(DocsOptions {
         output_dir,
@@ -499,9 +501,11 @@ fn print_usage() {
     eprintln!("  super-yaml from-json-schema <schema.json> [--output <file.syaml>]");
     eprintln!("  super-yaml validate <file> [--allow-env KEY]...");
     eprintln!(
-        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript|proto|html] [--allow-env KEY]..."
+        "  super-yaml compile <file> [--pretty] [--format json|yaml|rust|ts|typescript|proto|contracts-json|html] [--allow-env KEY]..."
     );
-    eprintln!("  super-yaml compile <file> [--yaml|--json|--rust|--ts|--proto|--html] [--allow-env KEY]...");
+    eprintln!(
+        "  super-yaml compile <file> [--yaml|--json|--rust|--ts|--proto|--contracts-json|--html] [--allow-env KEY]..."
+    );
     eprintln!("  super-yaml docs <path> --output <dir> [--follow-imports]");
     eprintln!();
     eprintln!("codegen options (--rust / --ts):");

@@ -54,14 +54,14 @@ Every `.syaml` file has this structure:
 ---data
 # Configuration values (optional section)
 
----functional
+---contracts
 # Function declarations with typed inputs, outputs, permissions, and contracts (optional section)
 ```
 
 ### Rules
 
 1. The first non-empty line **must** be exactly `---!syaml/v0`.
-2. Sections are opened with `---meta`, `---schema`, `---data`, or `---functional`.
+2. Sections are opened with `---meta`, `---schema`, `---data`, or `---contracts`.
 3. All four sections are optional. They can appear in any order. Each section can appear at most once.
 4. When omitted, `schema` and `data` default to empty objects.
 5. `---module` is a special section only valid in files named `module.syaml`. See the [Modules](#modules) section.
@@ -172,7 +172,7 @@ Relative paths resolve from the importing file's directory. `@module` paths are 
 
 By default all sections of the imported file are available under the namespace alias. Use `sections` to restrict which sections are imported.
 
-Valid section names: `schema`, `data`, `functional`.
+Valid section names: `schema`, `data`, `contracts`.
 
 ```yaml
 ---meta
@@ -644,7 +644,7 @@ InventoryConfig:
 
 ### Mutability
 
-Schema types can declare a `mutability` policy that constrains how data values of that type may be updated over time. This is enforced by the functional section's permission model.
+Schema types can declare a `mutability` policy that constrains how data values of that type may be updated over time. This is enforced by the contracts section's permission model.
 
 
 | Value               | Meaning                                                                   |
@@ -1346,7 +1346,7 @@ Currency: [USD, EUR, GBP]
 **Rules for manifests:**
 
 - `---module` is only valid in a file named `module.syaml`. Using it in any other file is an error.
-- `---data` and `---functional` are not allowed in `module.syaml`.
+- `---data` and `---contracts` are not allowed in `module.syaml`.
 - `---schema` is allowed for module-level shared types.
 
 ### `@module` import syntax
@@ -1433,12 +1433,12 @@ default_currency <string>: "=inv.default_currency"
 
 ---
 
-## The `functional` Section
+## The `contracts` Section
 
-The `functional` section declares named functions whose inputs, outputs, permissions, and behavioral contracts are all specified in the `.syaml` file. The compiler validates the contracts at compile time and generates typed stub code (Rust or TypeScript) from them.
+The `contracts` section declares named functions whose inputs, outputs, permissions, and behavioral contracts are all specified in the `.syaml` file. The compiler validates the contracts at compile time and generates typed stub code (Rust or TypeScript) from them.
 
 ```yaml
----functional
+---contracts
 FunctionName:
   inputs:
     param_name:
@@ -1517,7 +1517,7 @@ Score:
 score <Score>: 0
 high_score: 9999
 
----functional
+---contracts
 AddPoints:
   inputs:
     points:
@@ -2264,7 +2264,7 @@ _templates:
     locked_field!: value                   # Cannot be overridden by siblings
     open_field: value                      # Can be overridden by siblings
 
----functional
+---contracts
 FunctionName:                              # Function declaration
   inputs:
     param:

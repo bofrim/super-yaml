@@ -745,7 +745,10 @@ service:
     let compiled = compile(&dir.file_path("root.syaml"));
     assert_eq!(compiled["service"]["host"], json!("api.internal"));
     assert_eq!(compiled["service"]["port"], json!(8080));
-    assert_eq!(compiled["service"]["url"], json!("https://api.internal:8080"));
+    assert_eq!(
+        compiled["service"]["url"],
+        json!("https://api.internal:8080")
+    );
 }
 
 #[test]
@@ -1389,6 +1392,41 @@ Req:
 }
 
 #[test]
+fn sections_contracts_name_is_accepted() {
+    let dir = TempDir::new("sections_contracts");
+
+    dir.write(
+        "shared.syaml",
+        r#"
+---!syaml/v0
+---contracts
+Compute:
+  inputs:
+    value: integer
+"#,
+    );
+
+    dir.write(
+        "root.syaml",
+        r#"
+---!syaml/v0
+---meta
+imports:
+  shared:
+    path: ./shared.syaml
+    sections: [contracts]
+---schema
+{}
+---data
+{}
+"#,
+    );
+
+    let compiled = compile(&dir.file_path("root.syaml"));
+    assert_eq!(compiled, json!({}));
+}
+
+#[test]
 fn sections_unknown_section_name_errors() {
     let dir = TempDir::new("sections_unknown");
 
@@ -1473,10 +1511,7 @@ Config:
     let err = compile_document_from_path(&dir.file_path("root.syaml"), &env_provider(&[]))
         .unwrap_err()
         .to_string();
-    assert!(
-        err.contains("shared.Port"),
-        "unexpected error: {err}"
-    );
+    assert!(err.contains("shared.Port"), "unexpected error: {err}");
     assert!(
         err.contains("add 'schema' to sections"),
         "unexpected error: {err}"

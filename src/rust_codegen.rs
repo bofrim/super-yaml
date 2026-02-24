@@ -1124,13 +1124,13 @@ pub fn generate_rust_types_and_data_from_path(
     // Render data items using the same expanded types + type_names.
     let data_output = render_rust_data(&compiled.value, &type_hints, &expanded.types, &type_names);
 
-    let functional_output = if let Some(ref func_doc) = parsed.functional {
-        crate::functional::generate_rust_function_stubs(func_doc, &expanded.types)
+    let contracts_output = if let Some(ref func_doc) = parsed.contracts {
+        crate::contracts::generate_rust_function_stubs(func_doc, &expanded.types)
     } else {
         String::new()
     };
 
-    if data_output.is_empty() && functional_output.is_empty() {
+    if data_output.is_empty() && contracts_output.is_empty() {
         return Ok(types_output);
     }
 
@@ -1138,8 +1138,8 @@ pub fn generate_rust_types_and_data_from_path(
     if !data_output.is_empty() {
         result = format!("{result}\n// --- Data ---\n\n{data_output}");
     }
-    if !functional_output.is_empty() {
-        result = format!("{result}\n{functional_output}");
+    if !contracts_output.is_empty() {
+        result = format!("{result}\n{contracts_output}");
     }
     Ok(result)
 }

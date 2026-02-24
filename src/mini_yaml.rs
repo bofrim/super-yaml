@@ -832,7 +832,10 @@ mod tests {
     fn parses_folded_block_scalars() {
         let input = "message: >-\n  first line\n  second line\n\n  third line\n";
         let parsed = parse_document(input).unwrap();
-        assert_eq!(parsed, json!({"message":"first line second line\nthird line"}));
+        assert_eq!(
+            parsed,
+            json!({"message":"first line second line\nthird line"})
+        );
     }
 
     #[test]

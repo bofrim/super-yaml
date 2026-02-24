@@ -57,6 +57,10 @@ fn scan_sections_rejects_unknown_and_duplicate_and_accepts_any_order() {
     let err = scan_sections(unknown).unwrap_err();
     assert!(err.to_string().contains("unknown section 'unknown'"));
 
+    let legacy_name = "---!syaml/v0\n---schema\n{}\n---contract\n{}\n";
+    let err = scan_sections(legacy_name).unwrap_err();
+    assert!(err.to_string().contains("unknown section 'contract'"));
+
     let duplicate = "---!syaml/v0\n---schema\n{}\n---schema\n{}\n---data\na: 1\n";
     let err = scan_sections(duplicate).unwrap_err();
     assert!(err.to_string().contains("duplicate section 'schema'"));
@@ -105,6 +109,21 @@ fn parse_document_allows_missing_sections_with_defaults() {
     assert!(parsed.meta.is_none());
     assert!(parsed.schema.types.is_empty());
     assert_eq!(parsed.data.value, serde_json::json!({}));
+}
+
+#[test]
+fn parse_document_parses_contracts_section() {
+    let input = r#"
+---!syaml/v0
+---contracts
+Compute:
+  inputs:
+    value: integer
+"#;
+
+    let parsed = parse_document(input).unwrap();
+    let contracts = parsed.contracts.expect("contracts");
+    assert!(contracts.functions.contains_key("Compute"));
 }
 
 #[test]

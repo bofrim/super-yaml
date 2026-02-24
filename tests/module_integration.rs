@@ -6,7 +6,7 @@
 //! - `@module/file` import path resolution via `syaml.syaml` registry
 //! - Import policy enforcement (network, version, hash, blocked modules)
 //! - Validation: `---module` forbidden in non-manifest files
-//! - Validation: `---data` / `---functional` forbidden in `module.syaml`
+//! - Validation: `---data` / `---contracts` forbidden in `module.syaml`
 
 use std::collections::HashMap;
 use std::fs;

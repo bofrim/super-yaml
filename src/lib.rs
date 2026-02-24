@@ -21,14 +21,14 @@
 pub mod ast;
 /// Regex-based string constructor coercion for hinted object types.
 pub mod coerce;
+/// Parsing and validation for the `---contracts` section.
+pub mod contracts;
 /// Error types used throughout parsing, compilation, and validation.
 pub mod error;
 /// Expression lexer/parser/evaluator used by derived values and constraints.
 pub mod expr;
 /// URL-based import fetching, disk caching, and lockfile management.
 pub mod fetch;
-/// Parsing and validation for the `---functional` section.
-pub mod functional;
 /// HTML documentation generator for `.syaml` files.
 pub mod html_docs_gen;
 /// super_yaml schema to JSON Schema export.
@@ -118,7 +118,7 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
         type_hints: BTreeMap::new(),
         freeze_markers: BTreeMap::new(),
     };
-    let mut functional: Option<crate::ast::FunctionalDoc> = None;
+    let mut contracts: Option<crate::ast::ContractsDoc> = None;
 
     for section in sections {
         let section_value = parse_section_value(&section.name, &section.body)?;
@@ -138,8 +138,8 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
                     freeze_markers,
                 };
             }
-            "functional" => {
-                functional = Some(functional::parse_functional(&section_value)?);
+            "contracts" => {
+                contracts = Some(contracts::parse_contracts(&section_value)?);
             }
             "module" => {
                 // Module sections are only valid in module.syaml; handled by module::parse_module_manifest.
@@ -158,7 +158,7 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, SyamlError> {
         meta,
         schema,
         data,
-        functional,
+        contracts,
     })
 }
 
@@ -177,7 +177,7 @@ pub fn parse_document_or_manifest(input: &str) -> Result<ParsedDocument, SyamlEr
         type_hints: BTreeMap::new(),
         freeze_markers: BTreeMap::new(),
     };
-    let mut functional: Option<crate::ast::FunctionalDoc> = None;
+    let mut contracts: Option<crate::ast::ContractsDoc> = None;
 
     for section in sections {
         let section_value = parse_section_value(&section.name, &section.body)?;
@@ -197,8 +197,8 @@ pub fn parse_document_or_manifest(input: &str) -> Result<ParsedDocument, SyamlEr
                     freeze_markers,
                 };
             }
-            "functional" => {
-                functional = Some(functional::parse_functional(&section_value)?);
+            "contracts" => {
+                contracts = Some(contracts::parse_contracts(&section_value)?);
             }
             "module" => {
                 // Skip — the module section carries manifest metadata only.
@@ -213,7 +213,7 @@ pub fn parse_document_or_manifest(input: &str) -> Result<ParsedDocument, SyamlEr
         meta,
         schema,
         data,
-        functional,
+        contracts,
     })
 }
 
@@ -651,25 +651,25 @@ fn compile_parsed_document(
         target_schema_version.as_ref(),
     )?;
 
-    if let Some(ref func_doc) = parsed.functional {
+    if let Some(ref func_doc) = parsed.contracts {
         let import_aliases: std::collections::BTreeSet<String> = parsed
             .meta
             .iter()
             .flat_map(|m| m.imports.keys().cloned())
             .collect();
         let all_types = schema.types.clone();
-        functional::validate_functional_type_references(func_doc, &all_types)?;
-        functional::validate_permission_data_paths(func_doc, &data, &import_aliases)?;
-        functional::validate_permission_mutability_alignment(
+        contracts::validate_contracts_type_references(func_doc, &all_types)?;
+        contracts::validate_permission_data_paths(func_doc, &data, &import_aliases)?;
+        contracts::validate_permission_mutability_alignment(
             func_doc,
             &schema,
             &parsed.data.type_hints,
         )?;
-        functional::validate_permission_instance_lock_conflicts(
+        contracts::validate_permission_instance_lock_conflicts(
             func_doc,
             &parsed.data.freeze_markers,
         )?;
-        functional::validate_specification_strict_conditions(func_doc)?;
+        contracts::validate_specification_strict_conditions(func_doc)?;
     }
 
     strip_private_top_level_data_keys(&mut data);
@@ -815,9 +815,7 @@ fn augment_with_section_hint(e: SyamlError, hints: &HashMap<String, String>) -> 
             return match e {
                 SyamlError::SchemaError(m) => SyamlError::SchemaError(format!("{m}; {hint}")),
                 SyamlError::TypeHintError(m) => SyamlError::TypeHintError(format!("{m}; {hint}")),
-                SyamlError::FunctionalError(m) => {
-                    SyamlError::FunctionalError(format!("{m}; {hint}"))
-                }
+                SyamlError::ContractsError(m) => SyamlError::ContractsError(format!("{m}; {hint}")),
                 SyamlError::ExpressionError(m) => {
                     SyamlError::ExpressionError(format!("{m}; {hint}"))
                 }
@@ -1099,7 +1097,7 @@ fn parse_import_binding(alias: &str, value: &JsonValue) -> Result<ImportBinding,
         )));
     }
 
-    const VALID_IMPORT_SECTIONS: &[&str] = &["schema", "data", "functional"];
+    const VALID_IMPORT_SECTIONS: &[&str] = &["schema", "data", "contracts"];
 
     let (path, hash, signature, version, sections) = match value {
         JsonValue::String(path) => (path.clone(), None, None, None, None),

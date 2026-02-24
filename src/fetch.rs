@@ -15,10 +15,7 @@ pub enum ImportSource {
     /// A local file path (already canonicalized).
     Local(PathBuf),
     /// A remote URL with its local cache path.
-    Remote {
-        url: String,
-        cache_path: PathBuf,
-    },
+    Remote { url: String, cache_path: PathBuf },
 }
 
 impl ImportSource {
@@ -126,10 +123,7 @@ pub fn read_import_source(
 ) -> Result<String, SyamlError> {
     match source {
         ImportSource::Local(path) => fs::read_to_string(path).map_err(|e| {
-            SyamlError::ImportError(format!(
-                "failed to read import '{}': {e}",
-                path.display()
-            ))
+            SyamlError::ImportError(format!("failed to read import '{}': {e}", path.display()))
         }),
         ImportSource::Remote { url, cache_path } => {
             if !ctx.force_update {
@@ -141,9 +135,7 @@ pub fn read_import_source(
             let content = fetch_url(url)?;
 
             fs::create_dir_all(cache_path.parent().unwrap_or(Path::new("."))).map_err(|e| {
-                SyamlError::FetchError(format!(
-                    "failed to create cache directory: {e}"
-                ))
+                SyamlError::FetchError(format!("failed to create cache directory: {e}"))
             })?;
             fs::write(cache_path, &content).map_err(|e| {
                 SyamlError::FetchError(format!(
@@ -189,9 +181,8 @@ pub fn flush_lockfile(ctx: &FetchContext) -> Result<(), SyamlError> {
         return Ok(());
     }
     if let Some(ref path) = ctx.lockfile_path {
-        let json = serde_json::to_string_pretty(&ctx.lockfile).map_err(|e| {
-            SyamlError::FetchError(format!("failed to serialize lockfile: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(&ctx.lockfile)
+            .map_err(|e| SyamlError::FetchError(format!("failed to serialize lockfile: {e}")))?;
         fs::write(path, json).map_err(|e| {
             SyamlError::FetchError(format!(
                 "failed to write lockfile '{}': {e}",
@@ -367,10 +358,7 @@ fn fetch_url(url: &str) -> Result<String, SyamlError> {
         .into_body()
         .read_to_string()
         .map_err(|e| {
-            SyamlError::FetchError(format!(
-                "failed to read response body from '{}': {e}",
-                url
-            ))
+            SyamlError::FetchError(format!("failed to read response body from '{}': {e}", url))
         })?;
     Ok(body)
 }
@@ -472,7 +460,9 @@ mod tests {
         let json = serde_json::to_string_pretty(&lock).unwrap();
         let parsed: Lockfile = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.version, 1);
-        assert!(parsed.entries.contains_key("https://example.com/shared.syaml"));
+        assert!(parsed
+            .entries
+            .contains_key("https://example.com/shared.syaml"));
         let entry = &parsed.entries["https://example.com/shared.syaml"];
         assert_eq!(entry.file_version.as_deref(), Some("1.2.3"));
     }

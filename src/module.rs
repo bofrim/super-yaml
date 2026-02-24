@@ -27,13 +27,13 @@ pub const REGISTRY_FILENAME: &str = "syaml.syaml";
 ///
 /// Validates that:
 /// - The document has a `---module` section.
-/// - `---data` and `---functional` sections are absent.
+/// - `---data` and `---contracts` sections are absent.
 pub fn parse_module_manifest(input: &str) -> Result<ModuleManifest, SyamlError> {
     let (_version, sections) = scan_sections(input)?;
 
     // Enforce manifest-only constraints
     for sec in &sections {
-        if matches!(sec.name.as_str(), "data" | "functional") {
+        if matches!(sec.name.as_str(), "data" | "contracts") {
             return Err(SyamlError::ModuleManifestError(format!(
                 "'---{}' section is not allowed in module.syaml",
                 sec.name
@@ -60,9 +60,9 @@ fn parse_manifest_from_sections(
     meta_body: Option<&str>,
 ) -> Result<ModuleManifest, SyamlError> {
     let module_val = crate::mini_yaml::parse_document(module_body).map_err(|e| match e {
-        SyamlError::YamlParseError { message, .. } => SyamlError::ModuleManifestError(format!(
-            "---module section: {message}"
-        )),
+        SyamlError::YamlParseError { message, .. } => {
+            SyamlError::ModuleManifestError(format!("---module section: {message}"))
+        }
         other => other,
     })?;
 
@@ -115,9 +115,7 @@ fn parse_manifest_from_sections(
 
         if let Some(imports_val) = meta_map.get("imports") {
             let imports_map = imports_val.as_object().ok_or_else(|| {
-                SyamlError::ModuleManifestError(
-                    "meta.imports must be a mapping".to_string(),
-                )
+                SyamlError::ModuleManifestError("meta.imports must be a mapping".to_string())
             })?;
             let mut result = BTreeMap::new();
             for (alias, import_val) in imports_map {
@@ -296,10 +294,7 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
 pub fn load_module_registry(root: &Path) -> Result<BTreeMap<String, PathBuf>, SyamlError> {
     let registry_path = root.join(REGISTRY_FILENAME);
     let content = std::fs::read_to_string(&registry_path).map_err(|e| {
-        SyamlError::ModuleManifestError(format!(
-            "failed to read {}: {e}",
-            registry_path.display()
-        ))
+        SyamlError::ModuleManifestError(format!("failed to read {}: {e}", registry_path.display()))
     })?;
     parse_syaml_registry(&content, root)
 }
@@ -315,19 +310,16 @@ pub fn load_module_registry(root: &Path) -> Result<BTreeMap<String, PathBuf>, Sy
 ///   payments: "services/payments/"
 ///   core: "shared/core/"
 /// ```
-fn parse_syaml_registry(content: &str, root: &Path) -> Result<BTreeMap<String, PathBuf>, SyamlError> {
-    let (_version, sections) = scan_sections(content).map_err(|e| {
-        SyamlError::ModuleManifestError(format!("invalid syaml.syaml: {e}"))
-    })?;
+fn parse_syaml_registry(
+    content: &str,
+    root: &Path,
+) -> Result<BTreeMap<String, PathBuf>, SyamlError> {
+    let (_version, sections) = scan_sections(content)
+        .map_err(|e| SyamlError::ModuleManifestError(format!("invalid syaml.syaml: {e}")))?;
 
-    let data_sec = sections
-        .iter()
-        .find(|s| s.name == "data")
-        .ok_or_else(|| {
-            SyamlError::ModuleManifestError(
-                "syaml.syaml must contain a '---data' section".to_string(),
-            )
-        })?;
+    let data_sec = sections.iter().find(|s| s.name == "data").ok_or_else(|| {
+        SyamlError::ModuleManifestError("syaml.syaml must contain a '---data' section".to_string())
+    })?;
 
     let data_val = crate::mini_yaml::parse_document(&data_sec.body).map_err(|e| match e {
         SyamlError::YamlParseError { message, .. } => {
@@ -379,9 +371,9 @@ pub fn resolve_module_import(
         None => (without_at, None),
     };
 
-    let module_dir = registry.get(module_name).ok_or_else(|| {
-        SyamlError::ModuleNotFound(module_name.to_string())
-    })?;
+    let module_dir = registry
+        .get(module_name)
+        .ok_or_else(|| SyamlError::ModuleNotFound(module_name.to_string()))?;
 
     let resolved = match sub_path {
         Some(file) => {
@@ -413,7 +405,9 @@ pub fn apply_module_to_meta(meta: &mut Option<Meta>, manifest: &ModuleManifest) 
 
     // Merge metadata: module values are the base, file-level overrides
     for (key, value) in &manifest.metadata {
-        meta.file.entry(key.clone()).or_insert_with(|| value.clone());
+        meta.file
+            .entry(key.clone())
+            .or_insert_with(|| value.clone());
     }
 
     // Inject module-level imports: file-level shadows module-level
@@ -465,17 +459,11 @@ pub fn enforce_import_policy(
 
         // Blocked modules check
         if path.starts_with('@') {
-            let module_name = path
-                .trim_start_matches('@')
-                .split('/')
-                .next()
-                .unwrap_or("");
+            let module_name = path.trim_start_matches('@').split('/').next().unwrap_or("");
             if policy.blocked_modules.iter().any(|b| b == module_name) {
                 return Err(SyamlError::ImportPolicyViolation {
                     file: file_display.to_string(),
-                    reason: format!(
-                        "import '{alias}' references blocked module '{module_name}'"
-                    ),
+                    reason: format!("import '{alias}' references blocked module '{module_name}'"),
                 });
             }
         }
@@ -494,9 +482,7 @@ pub fn enforce_import_policy(
         if policy.require_hash && binding.hash.is_none() {
             return Err(SyamlError::ImportPolicyViolation {
                 file: file_display.to_string(),
-                reason: format!(
-                    "import '{alias}' must specify a hash (require_hash is true)"
-                ),
+                reason: format!("import '{alias}' must specify a hash (require_hash is true)"),
             });
         }
 
@@ -581,7 +567,10 @@ imports:
         let manifest = parse_module_manifest(input).unwrap();
         assert_eq!(manifest.name, "payments");
         assert_eq!(manifest.version.as_deref(), Some("1.0.0"));
-        assert_eq!(manifest.description.as_deref(), Some("Payment processing schemas"));
+        assert_eq!(
+            manifest.description.as_deref(),
+            Some("Payment processing schemas")
+        );
         assert_eq!(
             manifest.metadata.get("owner").and_then(|v| v.as_str()),
             Some("platform-team")
@@ -613,15 +602,15 @@ x: 1
     }
 
     #[test]
-    fn manifest_with_functional_section_errors() {
+    fn manifest_with_contracts_section_errors() {
         let input = r#"---!syaml/v0
 ---module
 name: foo
----functional
+---contracts
 {}
 "#;
         let err = parse_module_manifest(input).unwrap_err();
-        assert!(err.to_string().contains("---functional"), "{err}");
+        assert!(err.to_string().contains("---contracts"), "{err}");
     }
 
     #[test]
@@ -632,8 +621,14 @@ name: foo
             description: None,
             metadata: {
                 let mut m = BTreeMap::new();
-                m.insert("owner".to_string(), JsonValue::String("module-team".to_string()));
-                m.insert("base_key".to_string(), JsonValue::String("from-module".to_string()));
+                m.insert(
+                    "owner".to_string(),
+                    JsonValue::String("module-team".to_string()),
+                );
+                m.insert(
+                    "base_key".to_string(),
+                    JsonValue::String("from-module".to_string()),
+                );
                 m
             },
             import_policy: ImportPolicy::default(),
@@ -643,7 +638,10 @@ name: foo
         let mut meta = Some(Meta {
             file: {
                 let mut f = BTreeMap::new();
-                f.insert("owner".to_string(), JsonValue::String("file-team".to_string()));
+                f.insert(
+                    "owner".to_string(),
+                    JsonValue::String("file-team".to_string()),
+                );
                 f
             },
             env: BTreeMap::new(),
@@ -702,7 +700,10 @@ name: foo
             ..Default::default()
         };
         let mut imports = BTreeMap::new();
-        imports.insert("remote".to_string(), make_binding("https://example.com/schema.syaml"));
+        imports.insert(
+            "remote".to_string(),
+            make_binding("https://example.com/schema.syaml"),
+        );
 
         let err = enforce_import_policy(&imports, &policy, "test.syaml").unwrap_err();
         assert!(err.to_string().contains("allow_network_imports"), "{err}");
@@ -712,7 +713,10 @@ name: foo
     fn policy_allows_network_import_when_enabled() {
         let policy = ImportPolicy::default(); // allow_network_imports: true
         let mut imports = BTreeMap::new();
-        imports.insert("remote".to_string(), make_binding("https://example.com/schema.syaml"));
+        imports.insert(
+            "remote".to_string(),
+            make_binding("https://example.com/schema.syaml"),
+        );
         enforce_import_policy(&imports, &policy, "test.syaml").unwrap();
     }
 
@@ -805,7 +809,10 @@ name: foo
         );
 
         let path = resolve_module_import("@payments", &registry).unwrap();
-        assert_eq!(path, PathBuf::from("/project/services/payments/module.syaml"));
+        assert_eq!(
+            path,
+            PathBuf::from("/project/services/payments/module.syaml")
+        );
     }
 
     #[test]
@@ -817,7 +824,10 @@ name: foo
         );
 
         let path = resolve_module_import("@payments/invoice", &registry).unwrap();
-        assert_eq!(path, PathBuf::from("/project/services/payments/invoice.syaml"));
+        assert_eq!(
+            path,
+            PathBuf::from("/project/services/payments/invoice.syaml")
+        );
     }
 
     #[test]
@@ -829,7 +839,10 @@ name: foo
         );
 
         let path = resolve_module_import("@payments/invoice.syaml", &registry).unwrap();
-        assert_eq!(path, PathBuf::from("/project/services/payments/invoice.syaml"));
+        assert_eq!(
+            path,
+            PathBuf::from("/project/services/payments/invoice.syaml")
+        );
     }
 
     #[test]
@@ -848,7 +861,10 @@ modules:
   core: "shared/core/"
 "#;
         let result = parse_syaml_registry(content, Path::new("/project")).unwrap();
-        assert_eq!(result["payments"], PathBuf::from("/project/services/payments/"));
+        assert_eq!(
+            result["payments"],
+            PathBuf::from("/project/services/payments/")
+        );
         assert_eq!(result["core"], PathBuf::from("/project/shared/core/"));
     }
 

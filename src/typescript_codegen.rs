@@ -994,13 +994,13 @@ pub fn generate_typescript_types_and_data_from_path(
     // Render data items.
     let data_output = render_typescript_data(&compiled.value, &type_hints, &type_names);
 
-    let functional_output = if let Some(ref func_doc) = parsed.functional {
-        crate::functional::generate_typescript_function_stubs(func_doc, &schemas.types)
+    let contracts_output = if let Some(ref func_doc) = parsed.contracts {
+        crate::contracts::generate_typescript_function_stubs(func_doc, &schemas.types)
     } else {
         String::new()
     };
 
-    if data_output.is_empty() && functional_output.is_empty() {
+    if data_output.is_empty() && contracts_output.is_empty() {
         return Ok(types_output);
     }
 
@@ -1008,8 +1008,8 @@ pub fn generate_typescript_types_and_data_from_path(
     if !data_output.is_empty() {
         result = format!("{result}\n// --- Data ---\n\n{data_output}");
     }
-    if !functional_output.is_empty() {
-        result = format!("{result}\n{functional_output}");
+    if !contracts_output.is_empty() {
+        result = format!("{result}\n{contracts_output}");
     }
     Ok(result)
 }

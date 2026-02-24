@@ -1,7 +1,7 @@
 //! HTML documentation generator for `.syaml` files.
 //!
 //! Produces a self-contained HTML page documenting the schema types, data
-//! entries, and functional definitions found in a SYAML document.
+//! entries, and contracts definitions found in a SYAML document.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
 
-use crate::ast::{FunctionalDoc, Meta, SchemaDoc};
+use crate::ast::{ContractsDoc, Meta, SchemaDoc};
 use crate::section_scanner::scan_sections;
 use crate::{parse_document_or_manifest, SyamlError};
 
@@ -28,7 +28,7 @@ pub fn generate_html_docs(input: &str) -> Result<String, SyamlError> {
         file_title,
         parsed.meta.as_ref(),
         &parsed.schema,
-        parsed.functional.as_ref(),
+        parsed.contracts.as_ref(),
         Some(&parsed.data.value),
         raw_data.as_deref(),
         raw_schema.as_deref(),
@@ -56,7 +56,7 @@ pub fn generate_html_docs_from_path(path: impl AsRef<Path>) -> Result<String, Sy
         file_title,
         parsed.meta.as_ref(),
         &parsed.schema,
-        parsed.functional.as_ref(),
+        parsed.contracts.as_ref(),
         Some(&parsed.data.value),
         raw_data.as_deref(),
         raw_schema.as_deref(),
@@ -70,7 +70,7 @@ fn assemble_page(
     title: &str,
     meta: Option<&Meta>,
     schema: &SchemaDoc,
-    functional: Option<&FunctionalDoc>,
+    contracts: Option<&ContractsDoc>,
     data: Option<&JsonValue>,
     raw_data: Option<&str>,
     raw_schema: Option<&str>,
@@ -79,7 +79,7 @@ fn assemble_page(
         title,
         meta,
         schema,
-        functional,
+        contracts,
         data,
         raw_data,
         raw_schema,
@@ -91,7 +91,7 @@ fn assemble_page_with_paths(
     title: &str,
     meta: Option<&Meta>,
     schema: &SchemaDoc,
-    functional: Option<&FunctionalDoc>,
+    contracts: Option<&ContractsDoc>,
     data: Option<&JsonValue>,
     raw_data: Option<&str>,
     raw_schema: Option<&str>,
@@ -128,8 +128,8 @@ fn assemble_page_with_paths(
         .map(|m| render_meta_section(m, &import_html_paths))
         .unwrap_or_default();
     let schema_html = render_schema_section(schema, &import_html_paths, &type_sources);
-    let functional_html = functional
-        .map(|f| render_functional_section(f, &import_html_paths))
+    let contracts_html = contracts
+        .map(|f| render_contracts_section(f, &import_html_paths))
         .unwrap_or_default();
 
     // Only render data section if the value is non-null and non-empty.
@@ -140,7 +140,7 @@ fn assemble_page_with_paths(
         .map(|v| render_data_section(v, raw_data, &import_html_paths))
         .unwrap_or_default();
 
-    let nav_items = build_nav_items(schema, functional, data.filter(|v| !is_empty_data(v)));
+    let nav_items = build_nav_items(schema, contracts, data.filter(|v| !is_empty_data(v)));
 
     format!(
         r#"<!DOCTYPE html>
@@ -164,7 +164,7 @@ fn assemble_page_with_paths(
   <h1 class="page-title">{title}</h1>
 {meta_html}
 {schema_html}
-{functional_html}
+{contracts_html}
 {data_html}
 </main>
 <script>
@@ -207,7 +207,7 @@ function toggleTypeSource(id) {{
         nav_items = nav_items,
         meta_html = meta_html,
         schema_html = schema_html,
-        functional_html = functional_html,
+        contracts_html = contracts_html,
         data_html = data_html,
     )
 }
@@ -216,7 +216,7 @@ function toggleTypeSource(id) {{
 
 fn build_nav_items(
     schema: &SchemaDoc,
-    functional: Option<&FunctionalDoc>,
+    contracts: Option<&ContractsDoc>,
     data: Option<&JsonValue>,
 ) -> String {
     let mut items = String::new();
@@ -233,7 +233,7 @@ fn build_nav_items(
         }
     }
 
-    if let Some(func) = functional {
+    if let Some(func) = contracts {
         if !func.functions.is_empty() {
             items.push_str(r#"    <li class="nav-section">Functions</li>"#);
             items.push('\n');
@@ -780,10 +780,7 @@ fn render_type_card(
     html.push_str("</div>\n");
 
     // --- Rendered view ---
-    html.push_str(&format!(
-        "<div id=\"type-rendered-{id}\">\n",
-        id = card_id
-    ));
+    html.push_str(&format!("<div id=\"type-rendered-{id}\">\n", id = card_id));
 
     // Description if present
     if let Some(desc) = type_val.get("description").and_then(|v| v.as_str()) {
@@ -973,13 +970,7 @@ fn render_enum_type(val: &JsonValue) -> String {
                 html.push_str(&format!("<th rowspan=\"{max_depth}\">Key</th>"));
             }
             let mut cells = Vec::new();
-            collect_enum_header_cells(
-                &header_tree,
-                1,
-                level,
-                max_depth,
-                &mut cells,
-            );
+            collect_enum_header_cells(&header_tree, 1, level, max_depth, &mut cells);
             for cell in cells {
                 html.push_str(&format!(
                     "<th colspan=\"{}\" rowspan=\"{}\">{}</th>",
@@ -996,10 +987,7 @@ fn render_enum_type(val: &JsonValue) -> String {
         entry_keys.sort();
         for key in entry_keys {
             let value = entries.get(&key).expect("entry key collected from map");
-            html.push_str(&format!(
-                "<tr><td><code>{}</code></td>",
-                html_escape(&key)
-            ));
+            html.push_str(&format!("<tr><td><code>{}</code></td>", html_escape(&key)));
             for path in &columns {
                 let cell = get_enum_path_value(value, path)
                     .map(json_value_display)
@@ -1092,7 +1080,11 @@ fn collect_enum_header_cells(
     for (label, child) in &node.children {
         if current_level == target_level {
             let has_children = !child.children.is_empty();
-            let colspan = if has_children { enum_leaf_count(child) } else { 1 };
+            let colspan = if has_children {
+                enum_leaf_count(child)
+            } else {
+                1
+            };
             let rowspan = if has_children {
                 1
             } else {
@@ -1104,13 +1096,7 @@ fn collect_enum_header_cells(
                 rowspan,
             });
         } else if !child.children.is_empty() {
-            collect_enum_header_cells(
-                child,
-                current_level + 1,
-                target_level,
-                max_depth,
-                out,
-            );
+            collect_enum_header_cells(child, current_level + 1, target_level, max_depth, out);
         }
     }
 }
@@ -1252,10 +1238,10 @@ fn render_inline_constraints(val: &JsonValue) -> String {
     html
 }
 
-// ─── Functional section ───────────────────────────────────────────────────────
+// ─── Contracts section ───────────────────────────────────────────────────────
 
-fn render_functional_section(
-    func: &FunctionalDoc,
+fn render_contracts_section(
+    func: &ContractsDoc,
     import_html_paths: &BTreeMap<String, String>,
 ) -> String {
     if func.functions.is_empty() {
@@ -2120,7 +2106,7 @@ pub fn generate_html_docs_site(
             file_title,
             parsed.meta.as_ref(),
             &parsed.schema,
-            parsed.functional.as_ref(),
+            parsed.contracts.as_ref(),
             data_opt,
             &import_html_paths,
             Some(&index_href),
@@ -2154,7 +2140,7 @@ fn assemble_page_with_import_links(
     title: &str,
     meta: Option<&Meta>,
     schema: &SchemaDoc,
-    functional: Option<&FunctionalDoc>,
+    contracts: Option<&ContractsDoc>,
     data: Option<&JsonValue>,
     import_html_paths: &BTreeMap<String, String>,
     index_href: Option<&str>,
@@ -2170,8 +2156,8 @@ fn assemble_page_with_import_links(
         .map(|m| render_meta_section(m, import_html_paths))
         .unwrap_or_default();
     let schema_html = render_schema_section(schema, import_html_paths, &type_sources);
-    let functional_html = functional
-        .map(|f| render_functional_section(f, import_html_paths))
+    let contracts_html = contracts
+        .map(|f| render_contracts_section(f, import_html_paths))
         .unwrap_or_default();
 
     // Only render data section if the value is non-null and non-empty.
@@ -2181,7 +2167,7 @@ fn assemble_page_with_import_links(
         .map(|v| render_data_section(v, raw_data, import_html_paths))
         .unwrap_or_default();
 
-    let nav_items = build_nav_items(schema, functional, data.filter(|v| !is_empty_data(v)));
+    let nav_items = build_nav_items(schema, contracts, data.filter(|v| !is_empty_data(v)));
 
     let home_link = match index_href {
         Some(href) => format!(
@@ -2243,7 +2229,7 @@ fn assemble_page_with_import_links(
   <h1 class="page-title">{title}</h1>
 {meta_html}
 {schema_html}
-{functional_html}
+{contracts_html}
 {data_html}
 </main>
 <script>
@@ -2286,7 +2272,7 @@ function toggleTypeSource(id) {{
         nav_items = nav_items,
         meta_html = meta_html,
         schema_html = schema_html,
-        functional_html = functional_html,
+        contracts_html = contracts_html,
         data_html = data_html,
     )
 }

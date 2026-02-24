@@ -168,7 +168,11 @@ fn render_proto_types(types: &BTreeMap<String, JsonValue>) -> Result<String, Sya
         if let Some(variants) = collect_string_enum_variants(obj) {
             enums.push(render_proto_enum(name, &variants));
         } else if is_object_schema(obj) {
-            if obj.get("properties").and_then(JsonValue::as_object).is_some() {
+            if obj
+                .get("properties")
+                .and_then(JsonValue::as_object)
+                .is_some()
+            {
                 messages.push(render_proto_message(name, obj)?);
             } else if let Some(value_schema) = obj.get("values") {
                 // map<string, T> — emit as a message alias note; not a standalone message
@@ -203,7 +207,9 @@ fn render_proto_types(types: &BTreeMap<String, JsonValue>) -> Result<String, Sya
 
     if !enums.is_empty() {
         out.push('\n');
-        out.push_str("// ── Enums ──────────────────────────────────────────────────────────────\n");
+        out.push_str(
+            "// ── Enums ──────────────────────────────────────────────────────────────\n",
+        );
         out.push('\n');
         for e in &enums {
             out.push_str(e);
@@ -279,7 +285,9 @@ fn render_proto_message(
 
     for (prop_name, prop_schema) in properties {
         let Some(prop_obj) = prop_schema.as_object() else {
-            unsupported.push(format!("  // {prop_name}: unsupported (non-object schema)\n"));
+            unsupported.push(format!(
+                "  // {prop_name}: unsupported (non-object schema)\n"
+            ));
             continue;
         };
 
@@ -302,14 +310,11 @@ fn render_proto_message(
         }
 
         // Require field_number for non-removed fields
-        let field_number = meta
-            .as_ref()
-            .and_then(|m| m.field_number)
-            .ok_or_else(|| {
-                SyamlError::SchemaError(format!(
-                    "proto codegen: type '{name}' property '{prop_name}' is missing field_number"
-                ))
-            })?;
+        let field_number = meta.as_ref().and_then(|m| m.field_number).ok_or_else(|| {
+            SyamlError::SchemaError(format!(
+                "proto codegen: type '{name}' property '{prop_name}' is missing field_number"
+            ))
+        })?;
 
         let is_optional = prop_obj
             .get("optional")
@@ -321,8 +326,14 @@ fn render_proto_message(
             .map(|m| m.deprecated.is_some())
             .unwrap_or(false);
 
-        let field_line =
-            render_proto_field(prop_name, prop_schema, prop_obj, field_number, is_optional, is_deprecated);
+        let field_line = render_proto_field(
+            prop_name,
+            prop_schema,
+            prop_obj,
+            field_number,
+            is_optional,
+            is_deprecated,
+        );
 
         match field_line {
             Ok(line) => fields.push((field_number, line)),
@@ -374,7 +385,11 @@ fn render_proto_field(
             let value_type = proto_type_for_schema(value_schema, prop_obj)
                 .ok_or("unsupported map value type")?;
             let map_type = format!("map<string, {value_type}>");
-            let deprecated_opt = if is_deprecated { " [deprecated = true]" } else { "" };
+            let deprecated_opt = if is_deprecated {
+                " [deprecated = true]"
+            } else {
+                ""
+            };
             return Ok(format!(
                 "  {map_type} {name} = {field_number}{deprecated_opt};\n"
             ));
@@ -385,8 +400,7 @@ fn render_proto_field(
             if prop_obj.get("properties").is_some() {
                 return Err("unsupported inline object type");
             }
-            let proto_t = proto_type_for_schema(prop_schema, prop_obj)
-                .ok_or("unsupported type")?;
+            let proto_t = proto_type_for_schema(prop_schema, prop_obj).ok_or("unsupported type")?;
             let q = if is_optional && is_scalar_proto_type(&proto_t) {
                 "optional".to_string()
             } else {
@@ -396,7 +410,11 @@ fn render_proto_field(
         }
     };
 
-    let deprecated_opt = if is_deprecated { " [deprecated = true]" } else { "" };
+    let deprecated_opt = if is_deprecated {
+        " [deprecated = true]"
+    } else {
+        ""
+    };
 
     let line = if qualifier.is_empty() {
         format!("  {proto_type} {name} = {field_number}{deprecated_opt};\n")
@@ -455,7 +473,10 @@ fn proto_scalar_type(schema: &JsonValue, _types: &BTreeMap<String, JsonValue>) -
 }
 
 fn is_scalar_proto_type(t: &str) -> bool {
-    matches!(t, "string" | "int64" | "double" | "bool" | "bytes" | "int32" | "uint64" | "float")
+    matches!(
+        t,
+        "string" | "int64" | "double" | "bool" | "bytes" | "int32" | "uint64" | "float"
+    )
 }
 
 fn proto_message_name(name: &str) -> String {

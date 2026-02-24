@@ -381,7 +381,7 @@ class SyamlSemanticTokensProvider
   ): vscode.ProviderResult<vscode.SemanticTokens> {
     const collector = new TokenCollector();
     const typeDefinitionKeysByLine = collectTypeDefinitionKeyRangesByLine(document);
-    let currentSection: "meta" | "schema" | "data" | "functional" | "module" | undefined;
+    let currentSection: "meta" | "schema" | "data" | "contracts" | "module" | undefined;
 
     for (let line = 0; line < document.lineCount; line += 1) {
       const text = document.lineAt(line).text;
@@ -401,9 +401,9 @@ class SyamlSemanticTokensProvider
         collector.add(line, markerMatch[1].length, markerMatch[2].length, "keyword");
       }
 
-      const sectionMatch = /^(\s*)---(meta|schema|data|functional|module)\s*$/.exec(code);
+      const sectionMatch = /^(\s*)---(meta|schema|data|contracts|module)\s*$/.exec(code);
       if (sectionMatch) {
-        currentSection = sectionMatch[2] as "meta" | "schema" | "data" | "functional" | "module";
+        currentSection = sectionMatch[2] as "meta" | "schema" | "data" | "contracts" | "module";
         const marker = `---${sectionMatch[2]}`;
         collector.add(
           line,
@@ -2666,8 +2666,8 @@ function extractDiagnosticPathFromMessage(message: string): string | undefined {
     /normalized\s+'(\$[A-Za-z0-9_.\[\]]+)'/i,
     /\bat\s+'?(\$[A-Za-z0-9_.\[\]]+)'?/i,
     /\bpath\s+'(\$[A-Za-z0-9_.\[\]]+)'/i,
-    // functional error: functional.FuncName: ... → highlight the function name
-    /\bfunctional error:\s*(functional\.[A-Za-z0-9_]+)/i
+    // contracts error: contracts.FuncName: ... → highlight the function name
+    /\bcontracts error:\s*(contracts\.[A-Za-z0-9_]+)/i
   ];
   for (const pattern of patterns) {
     const match = pattern.exec(message);
@@ -2728,8 +2728,8 @@ function collectPathLocationsForPrefix(
   if (path.startsWith("$")) {
     return collectDataKeyLocations(document);
   }
-  if (path.startsWith("functional.")) {
-    return collectFunctionalKeyLocations(document);
+  if (path.startsWith("contracts.")) {
+    return collectContractsKeyLocations(document);
   }
   return [];
 }
@@ -2893,8 +2893,8 @@ function collectSchemaKeyLocations(document: vscode.TextDocument): SchemaKeyLoca
   return locations;
 }
 
-function collectFunctionalKeyLocations(document: vscode.TextDocument): SchemaKeyLocation[] {
-  const bounds = findSectionBounds(document, "functional");
+function collectContractsKeyLocations(document: vscode.TextDocument): SchemaKeyLocation[] {
+  const bounds = findSectionBounds(document, "contracts");
   if (!bounds) {
     return [];
   }
@@ -2929,7 +2929,7 @@ function collectFunctionalKeyLocations(document: vscode.TextDocument): SchemaKey
     }
 
     stack.push({ indent, path: keyInfo.key });
-    const path = `functional.${stack.map((entry) => entry.path).join(".")}`;
+    const path = `contracts.${stack.map((entry) => entry.path).join(".")}`;
     const start = indent + keyInfo.keyOffset;
     locations.push({
       path,
@@ -3488,7 +3488,7 @@ function loadRegistryForDocument(documentFsPath: string): Map<string, string> | 
 
 function findSectionBounds(
   document: vscode.TextDocument,
-  sectionName: "meta" | "schema" | "data" | "functional"
+  sectionName: "meta" | "schema" | "data" | "contracts"
 ): { startLine: number; endLine: number } | undefined {
   const marker = `---${sectionName}`;
   for (let i = 0; i < document.lineCount; i += 1) {
@@ -3499,7 +3499,7 @@ function findSectionBounds(
     let endLine = document.lineCount;
     for (let j = i + 1; j < document.lineCount; j += 1) {
       const lineText = document.lineAt(j).text.trim();
-      if (/^---(meta|schema|data|functional)\s*$/.test(lineText)) {
+      if (/^---(meta|schema|data|contracts)\s*$/.test(lineText)) {
         endLine = j;
         break;
       }

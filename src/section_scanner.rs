@@ -92,7 +92,10 @@ pub fn scan_sections(input: &str) -> Result<(String, Vec<Section>), SyamlError> 
 fn validate_sections(sections: &[Section]) -> Result<(), SyamlError> {
     let mut seen = std::collections::HashSet::new();
     for section in sections {
-        if !matches!(section.name.as_str(), "meta" | "schema" | "data" | "functional" | "module") {
+        if !matches!(
+            section.name.as_str(),
+            "meta" | "schema" | "data" | "contracts" | "module"
+        ) {
             return Err(SyamlError::SectionError(format!(
                 "unknown section '{}'",
                 section.name

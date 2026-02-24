@@ -76,12 +76,13 @@ pub fn verify_signature(
 
     let sig_bytes = base64::engine::general_purpose::STANDARD
         .decode(&sig.value)
-        .map_err(|e| {
-            SyamlError::SignatureError(format!("invalid base64 signature value: {e}"))
-        })?;
+        .map_err(|e| SyamlError::SignatureError(format!("invalid base64 signature value: {e}")))?;
 
     let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
-        SyamlError::SignatureError(format!("invalid Ed25519 signature ({} bytes): {e}", sig_bytes.len()))
+        SyamlError::SignatureError(format!(
+            "invalid Ed25519 signature ({} bytes): {e}",
+            sig_bytes.len()
+        ))
     })?;
 
     verifying_key.verify(content, &signature).map_err(|_| {
@@ -126,7 +127,11 @@ fn extract_pem_base64(pem: &str) -> Option<String> {
             b64.push_str(trimmed);
         }
     }
-    if b64.is_empty() { None } else { Some(b64) }
+    if b64.is_empty() {
+        None
+    } else {
+        Some(b64)
+    }
 }
 
 /// Extracts the 32-byte Ed25519 public key from a DER-encoded SubjectPublicKeyInfo.
@@ -213,8 +218,11 @@ mod tests {
     #[test]
     fn verify_hash_sha256_mismatch() {
         let content = b"hello world";
-        let err = verify_hash(content, "sha256:0000000000000000000000000000000000000000000000000000000000000000")
-            .unwrap_err();
+        let err = verify_hash(
+            content,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("sha256 mismatch"));
     }
 

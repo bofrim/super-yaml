@@ -642,6 +642,9 @@ mod tests {
         expand_data_templates(&mut data, &imports).unwrap();
         assert_eq!(data["service"]["path"], json!("/srv/apps/api"));
         assert_eq!(data["service"]["unit"], json!("templates/api.service.j2"));
-        assert_eq!(data["service"]["url"], json!("https://api.internal:443/health"));
+        assert_eq!(
+            data["service"]["url"],
+            json!("https://api.internal:443/health")
+        );
     }
 }

@@ -11,7 +11,9 @@ use crate::expr::eval::{evaluate, EvalContext, EvalError};
 use crate::expr::parse_expression;
 use crate::expr::parser::{BinaryOp, Expr};
 use crate::resolve::get_json_path;
-use crate::schema::{parse_field_version_meta, resolve_type_schema, validate_json_against_schema_with_types};
+use crate::schema::{
+    parse_field_version_meta, resolve_type_schema, validate_json_against_schema_with_types,
+};
 
 const MAX_CONSTRAINT_PATHS: usize = 2048;
 const MAX_CONSTRAINTS_PER_PATH: usize = 128;
@@ -115,11 +117,7 @@ fn are_equivalent_type_names(
 
 /// Returns true if `child` is a direct or transitive descendant of `ancestor`
 /// in the extends chain.
-fn is_descendant_of(
-    child: &str,
-    ancestor: &str,
-    extends_map: &BTreeMap<String, String>,
-) -> bool {
+fn is_descendant_of(child: &str, ancestor: &str, extends_map: &BTreeMap<String, String>) -> bool {
     let mut current = child;
     let mut seen = std::collections::HashSet::new();
     loop {
@@ -577,16 +575,14 @@ pub fn validate_constraints_with_imports(
                 named_scopes: std::collections::BTreeMap::new(),
             };
 
-            let result = evaluate(ast, &ctx).map_err(|eval_err| {
-                match eval_err {
-                    EvalError::Fatal(SyamlError::ExpressionError(msg)) => {
-                        SyamlError::ConstraintError(format!(
-                            "constraint evaluation failed at '{}': {} (in expression '{}')",
-                            normalized_path, msg, expression
-                        ))
-                    }
-                    other => map_eval_error(other),
+            let result = evaluate(ast, &ctx).map_err(|eval_err| match eval_err {
+                EvalError::Fatal(SyamlError::ExpressionError(msg)) => {
+                    SyamlError::ConstraintError(format!(
+                        "constraint evaluation failed at '{}': {} (in expression '{}')",
+                        normalized_path, msg, expression
+                    ))
                 }
+                other => map_eval_error(other),
             })?;
             match result {
                 JsonValue::Bool(true) => {}
