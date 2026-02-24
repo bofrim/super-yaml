@@ -1,0 +1,15 @@
+---!syaml/v0
+---schema
+{}
+
+---data
+literal_text <string>: |-
+  Line one
+  Line two
+folded_text <string>: >-
+  This is folded
+  into one line.
+paragraph_text <string>: >-
+  First paragraph line.
+
+  Second paragraph line.

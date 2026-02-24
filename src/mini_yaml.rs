@@ -58,6 +58,20 @@ struct Line<'a> {
     raw: &'a str,
 }
 
+#[derive(Clone, Copy)]
+enum ChompingMode {
+    Clip,
+    Strip,
+    Keep,
+}
+
+#[derive(Clone, Copy)]
+struct BlockScalarHeader {
+    folded: bool,
+    chomping: ChompingMode,
+    explicit_indent: Option<usize>,
+}
+
 fn parse_block(
     lines: &[Line<'_>],
     idx: &mut usize,
@@ -174,6 +188,8 @@ fn parse_mapping(
                     parse_block(lines, idx, next_indent, depth + 1)?
                 }
             }
+        } else if let Some(header) = parse_block_scalar_header(value_raw)? {
+            JsonValue::String(parse_block_scalar(lines, idx, indent, header)?)
         } else {
             parse_inline_value(value_raw, depth + 1)?
         };
@@ -242,6 +258,8 @@ fn parse_sequence(
                     parse_block(lines, idx, next_indent, depth + 1)?
                 }
             }
+        } else if let Some(header) = parse_block_scalar_header(rest)? {
+            JsonValue::String(parse_block_scalar(lines, idx, indent, header)?)
         } else {
             parse_inline_value(rest, depth + 1)?
         };
@@ -463,6 +481,146 @@ fn split_top_level(input: &str, delimiter: char) -> Vec<String> {
     out
 }
 
+fn parse_block_scalar_header(raw: &str) -> Result<Option<BlockScalarHeader>, SyamlError> {
+    let s = strip_inline_comment(raw).trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+
+    let mut chars = s.chars();
+    let Some(style) = chars.next() else {
+        return Ok(None);
+    };
+    if style != '|' && style != '>' {
+        return Ok(None);
+    }
+
+    let mut chomping = ChompingMode::Clip;
+    let mut explicit_indent: Option<usize> = None;
+
+    for ch in chars {
+        match ch {
+            '+' => {
+                chomping = ChompingMode::Keep;
+            }
+            '-' => {
+                chomping = ChompingMode::Strip;
+            }
+            '1'..='9' => {
+                explicit_indent = Some((ch as u8 - b'0') as usize);
+            }
+            c if c.is_whitespace() => break,
+            _ => {
+                return Err(SyamlError::YamlParseError {
+                    section: "unknown".to_string(),
+                    message: format!("invalid block scalar header '{}'", raw),
+                });
+            }
+        }
+    }
+
+    Ok(Some(BlockScalarHeader {
+        folded: style == '>',
+        chomping,
+        explicit_indent,
+    }))
+}
+
+fn parse_block_scalar(
+    lines: &[Line<'_>],
+    idx: &mut usize,
+    parent_indent: usize,
+    header: BlockScalarHeader,
+) -> Result<String, SyamlError> {
+    let mut content = Vec::<String>::new();
+    let mut content_indent = header.explicit_indent.map(|v| parent_indent + v);
+
+    while *idx < lines.len() {
+        let line = lines[*idx];
+        let indent = leading_spaces(line.raw);
+        let text = &line.raw[indent..];
+
+        if text.trim().is_empty() {
+            content.push(String::new());
+            *idx += 1;
+            continue;
+        }
+
+        let effective_indent = match content_indent {
+            Some(v) => v,
+            None => {
+                if indent <= parent_indent {
+                    break;
+                }
+                content_indent = Some(indent);
+                indent
+            }
+        };
+
+        if indent < effective_indent {
+            break;
+        }
+
+        content.push(line.raw[effective_indent..].to_string());
+        *idx += 1;
+    }
+
+    let mut rendered = if header.folded {
+        fold_block_lines(&content)
+    } else {
+        content.join("\n")
+    };
+
+    let trailing_newlines = match header.chomping {
+        ChompingMode::Strip => 0,
+        ChompingMode::Clip => 1,
+        ChompingMode::Keep => 1,
+    };
+    for _ in 0..trailing_newlines {
+        rendered.push('\n');
+    }
+
+    if matches!(header.chomping, ChompingMode::Keep) {
+        let mut extra = 0usize;
+        for line in content.iter().rev() {
+            if line.is_empty() {
+                extra += 1;
+            } else {
+                break;
+            }
+        }
+        for _ in 0..extra {
+            rendered.push('\n');
+        }
+    }
+
+    Ok(rendered)
+}
+
+fn fold_block_lines(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    out.push_str(&lines[0]);
+    for i in 1..lines.len() {
+        let prev_blank = lines[i - 1].is_empty();
+        let cur_blank = lines[i].is_empty();
+        if cur_blank {
+            out.push('\n');
+            continue;
+        }
+        if prev_blank {
+            out.push_str(&lines[i]);
+            continue;
+        }
+        out.push(' ');
+        out.push_str(&lines[i]);
+    }
+    out
+}
+
 fn parse_key(raw: &str) -> Result<String, SyamlError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -661,5 +819,26 @@ mod tests {
 
         let err = parse_document(&input).unwrap_err();
         assert!(err.to_string().contains("maximum nesting depth exceeded"));
+    }
+
+    #[test]
+    fn parses_literal_block_scalars() {
+        let input = "message: |-\n  first line\n  second line\n";
+        let parsed = parse_document(input).unwrap();
+        assert_eq!(parsed, json!({"message":"first line\nsecond line"}));
+    }
+
+    #[test]
+    fn parses_folded_block_scalars() {
+        let input = "message: >-\n  first line\n  second line\n\n  third line\n";
+        let parsed = parse_document(input).unwrap();
+        assert_eq!(parsed, json!({"message":"first line second line\nthird line"}));
+    }
+
+    #[test]
+    fn parses_block_scalars_in_sequences() {
+        let input = "items:\n  - |-\n    one\n    two\n  - >-\n    alpha\n    beta\n";
+        let parsed = parse_document(input).unwrap();
+        assert_eq!(parsed, json!({"items":["one\ntwo", "alpha beta"]}));
     }
 }

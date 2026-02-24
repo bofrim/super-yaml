@@ -40,6 +40,7 @@ fn all_examples_compile_to_expected_json() {
         "rest_api",
         "versioned_fields",
         "keyed_enum_timezones",
+        "multiline_strings",
     ];
 
     for case in cases {
@@ -75,6 +76,7 @@ fn all_examples_validate_successfully() {
         "rest_api",
         "versioned_fields",
         "keyed_enum_timezones",
+        "multiline_strings",
     ];
 
     for case in cases {
